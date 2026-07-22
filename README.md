@@ -60,7 +60,9 @@ GLM inference engine or an OpenAI-compatible server, and the ternary codec is no
 policy. The CPU semantic oracle can multiply directly from grouped ternary storage with bounded
 encoded-group, decoded-group, and output-row tiles; it never reconstructs the matrix in full. A
 dependency-free Rust native core now implements the same codec and direct linear path using exclusively
-caller-owned scratch buffers.
+caller-owned scratch buffers. The pinned GLM-5.2 config and Hugging Face index also pass an exact,
+fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
+expert tensor; model weight shards have not been downloaded.
 
 Run the current Windows verification gate with:
 

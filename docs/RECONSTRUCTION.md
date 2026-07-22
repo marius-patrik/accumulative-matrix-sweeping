@@ -27,6 +27,8 @@ projected from parameter counts.
 | Missing AMS gitlink | `813d55ad985dc9d17daae08957d0853b569278bd` | Referenced by recovered PAES but absent from available Git objects. It must not be synthesized or misrepresented as recovered history. |
 | Froq personal fork | `rebrand/grok-to-froq` at `b6432a592b3872ca727321c75577d9f0f81e0371` | User-owned worktree with a large uncommitted xai-to-froq rename. Read-only until that work is committed or otherwise isolated. |
 | Froq upstream | `xai-org/grok-build` `main` at `a5727c5960452e7527a154b25cb5bf00cda0545e` | Model-agnostic harness reference. It is one commit ahead and two commits behind the current fork ancestry at this status date. |
+| GLM-5.2 model | `zai-org/GLM-5.2` at `b4734de4facf877f85769a911abafc5283eab3d9` | Official config, tokenizer metadata/template, license, README, and safetensors index are pinned locally. No weight shard has been downloaded. |
+| GLM-MoE-DSA reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, model, tests, and documentation used to derive execution order and compatibility risks. |
 
 Remote refs were fetched with pruning on the status date. No merge, reset, checkout, push, or remote
 history mutation was performed.
@@ -122,9 +124,15 @@ The reconstruction branch currently contains:
   checked in-memory and nonsymlink regular-file positional reads, ternary group decode, arena preflight,
   and direct ternary linear execution using caller-owned encoded, decoded, and FP64 accumulator scratch;
   native format/check/test/strict-Clippy gates pass on the Windows MSVC toolchain.
+- a bounded, duplicate-key-rejecting GLM-MoE-DSA architecture parser and fail-closed tensor inventory
+  that distinguishes dense layers, shared experts, every routed expert, full/shared DSA indexers, and
+  MTP tensors. The generated 59,585-name inventory exactly matches the pinned official GLM-5.2 index:
+  282 shards and 1,506,659,919,872 declared BF16 tensor bytes. The config and index SHA-256 digests are
+  `185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a` and
+  `5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e`.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 74 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 83 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
@@ -158,3 +166,7 @@ non-overlapping coverage of the remaining data buffer. See the
   local `/v1` base URL once the server exists.
 - Quality and throughput thresholds remain unset until GLM-4.7-Flash produces a reproducible baseline.
   Correctness, bounded residency, and protocol semantics are hard gates regardless of speed.
+- Transformers 5.12.0 skips several GLM-MoE-DSA equivalence paths because hard DSA top-k can change
+  under small numerical or batching differences, and its assisted/static-cache tests are disabled for
+  index-mask incompatibilities. AMS must establish its own deterministic index-ranking, cache, and MTP
+  evidence instead of treating upstream model loading as an end-to-end correctness oracle.

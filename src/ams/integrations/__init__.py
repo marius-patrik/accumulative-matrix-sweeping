@@ -1,5 +1,14 @@
 """Strict normalization boundaries for external model formats."""
 
+from ams.integrations.glm_moe_dsa import (
+    GlmMoeDsaArchitecture,
+    GlmTensorInventory,
+    GlmTensorRole,
+    GlmTensorSlot,
+    expected_glm_tensor_slots,
+    parse_glm_moe_dsa_architecture,
+    validate_glm_tensor_inventory,
+)
 from ams.integrations.huggingface import (
     HuggingFaceCatalog,
     HuggingFaceCatalogTensor,
@@ -26,6 +35,10 @@ from ams.integrations.safetensors import (
 )
 
 __all__ = [
+    "GlmMoeDsaArchitecture",
+    "GlmTensorInventory",
+    "GlmTensorRole",
+    "GlmTensorSlot",
     "HuggingFaceCatalog",
     "HuggingFaceCatalogTensor",
     "HuggingFaceIdentityPlan",
@@ -44,6 +57,9 @@ __all__ = [
     "build_huggingface_catalog",
     "build_huggingface_identity_plan",
     "build_huggingface_mixed_plan",
+    "expected_glm_tensor_slots",
+    "parse_glm_moe_dsa_architecture",
     "parse_huggingface_shard_index",
     "parse_safetensors_header",
+    "validate_glm_tensor_inventory",
 ]
