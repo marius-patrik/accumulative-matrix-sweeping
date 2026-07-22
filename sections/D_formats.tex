@@ -1,0 +1,184 @@
+\section{Checkpoint, Plan, and Configuration Formats}
+\label{app:formats}
+
+The formats are designed for bounded range access, integrity, portability, and streaming conversion. JSON examples are illustrative; the repository includes normative JSON Schemas.
+
+\subsection{AMS package layout}
+
+A directory package has the form:
+
+\begin{lstlisting}
+model.ams/
+  manifest.json
+  graph.amsir
+  tensors/
+    shard-00000.amsbin
+    shard-00001.amsbin
+  packs/
+    cpu-generic/...
+    cuda-smXX/...
+  signatures/
+    manifest.ed25519
+  provenance/
+    source.json
+\end{lstlisting}
+
+A single-file container may place a fixed header, canonical manifest, chunk table, aligned data chunks, and optional signature footer in one file. The directory form is simpler for updates and content-addressed stores. All offsets are unsigned 64-bit with checked arithmetic; implementations may impose lower configured limits.
+
+\subsection{Tensor descriptor}
+
+Each tensor descriptor separates logical shape and alias semantics from one or more independently addressable physical layouts.
+
+\begin{lstlisting}[language={},caption={Illustrative tensor manifest entry.}]
+{
+  "tensor_id": "model.layers.0.mlp.down_proj.weight",
+  "storage_id": "sha256:...",
+  "shape": [4096, 11008],
+  "logical_dtype": "bfloat16",
+  "storage_dtype": "int4_grouped",
+  "byte_order": "little",
+  "strides": [11008, 1],
+  "storage_offset_elements": 0,
+  "immutable": true,
+  "aliases": [],
+  "codec": {
+    "name": "ams.int4.grouped.v1",
+    "group_axis": 1,
+    "group_size": 128,
+    "scale_dtype": "float16",
+    "zero_point": false
+  },
+  "layouts": [
+    {
+      "layout_id": "generic-2d-256x2048-v1",
+      "tile_shape": [256, 2048],
+      "chunks": [
+        {
+          "object": "tensors/shard-00000.amsbin",
+          "offset": 1048576,
+          "length": 278528,
+          "logical_origin": [0, 0],
+          "logical_extent": [256, 2048],
+          "checksum": "sha256:..."
+        }
+      ]
+    }
+  ]
+}
+\end{lstlisting}
+
+Every logical tile is covered exactly once per complete layout, except declared sparse/default regions. Chunks cannot overlap reserved metadata ranges. Codec metadata has a declared maximum decoded size and validation function.
+
+\subsection{Root manifest}
+
+The root records:
+
+\begin{itemize}
+  \item format major/minor version and feature flags;
+  \item model architecture/configuration and canonical graph hash;
+  \item tokenizer and generation asset hashes;
+  \item tensor descriptors and unique storage objects;
+  \item aliases, views, tied weights, and mutable state roots;
+  \item operator/plugin requirements and minimum versions;
+  \item source provenance, conversion command, and licenses;
+  \item content hashes, optional Merkle root, and signature metadata;
+  \item creation time as metadata only, never as part of deterministic content hashing unless declared.
+\end{itemize}
+
+Canonical JSON uses sorted keys, UTF-8, normalized numbers, and no insignificant whitespace for signing. Alternatively, a canonical binary format may be used; readers must not sign an implementation-dependent serialization.
+
+\subsection{Plan format}
+
+A plan document includes:
+
+\begin{lstlisting}[language={},caption={Abbreviated plan structure.}]
+{
+  "plan_schema": "1.0",
+  "plan_id": "sha256:...",
+  "model_root": "sha256:...",
+  "graph_hash": "sha256:...",
+  "hardware_fingerprint": "sha256:...",
+  "software_fingerprint": "sha256:...",
+  "request_envelope": {
+    "max_prompt_tokens": 4096,
+    "max_new_tokens": 512,
+    "max_batch": 4
+  },
+  "numeric_mode": "deterministic",
+  "reservations": {
+    "device:0": 6442450944,
+    "host:pinned:0": 268435456,
+    "host:cache:0": 8589934592,
+    "spill": 274877906944
+  },
+  "operators": [
+    {
+      "node_id": 317,
+      "implementation_id": "ams.linear.cuda.v3",
+      "tile": {"p": 64, "i": 512, "j": 2048},
+      "loop_order": "output_stationary",
+      "buffers": 2,
+      "workspace_max": 8388608,
+      "resource_vector": {"device:0": 75497472}
+    }
+  ],
+  "fallback_plan_ids": ["sha256:..."],
+  "calibration_id": "sha256:..."
+}
+\end{lstlisting}
+
+Plan IDs hash all semantics- and resource-relevant fields. Human-readable estimates may be excluded from the hash if clearly marked non-normative. Plans are caches: rejection after a software/hardware mismatch triggers regeneration, not model corruption.
+
+\subsection{Runtime configuration schema}
+
+The normative schema is closed by default. A minimal configuration contains:
+
+\begin{lstlisting}[language={},caption={Illustrative runtime configuration.}]
+{
+  "version": "1.0",
+  "storage": {
+    "model_uri": "/models/model.ams",
+    "spill_uri": "/var/lib/ams/spill",
+    "spill_quota_bytes": 300000000000,
+    "direct_io": "auto",
+    "verify_checksums": true
+  },
+  "memory": {
+    "device_budget_bytes": {"device:0": 6442450944},
+    "pinned_budget_bytes": 268435456,
+    "host_cache_budget_bytes": 8589934592,
+    "runtime_reserve_fraction": 0.08
+  },
+  "execution": {
+    "backend_preference": ["cuda", "cpu"],
+    "numeric_mode": "stable",
+    "max_inflight_requests": 4,
+    "deterministic": false,
+    "allow_approximation": false
+  },
+  "security": {
+    "allow_pickle": false,
+    "require_signature": false,
+    "allowed_plugins": []
+  },
+  "telemetry": {
+    "metrics": true,
+    "trace_sampling": 0.01,
+    "log_tensor_data": false
+  }
+}
+\end{lstlisting}
+
+The reserve fraction is a planning input, not an allocation guarantee. The broker converts it into a concrete reservation or returns preflight failure.
+
+\subsection{Journals and version roots}
+
+A journal record has transaction ID, monotonically increasing sequence, record type, logical tile/version, physical region, checksum, and checksum of the record. Publication writes a root record naming a complete set or parent-plus-delta chain. Recovery scans valid records, ignores torn tails, and selects the newest atomically published root whose referenced regions verify.
+
+\subsection{Integrity and signatures}
+
+Chunk checksums detect corruption; a signed root authenticates the mapping from logical tensors to chunk hashes. Signatures do not encrypt weights. Deployments may encrypt storage objects through filesystem, block-device, or store adapters; direct device IO must preserve authentication/decryption semantics and resource bounds.
+
+\subsection{Alignment and portability}
+
+Generic chunks use a conservative alignment, such as 4~KiB, and contain explicit padding excluded from logical data. Device-specific packs state target architecture, compiler/kernel ABI, alignment, and source logical hash. A reader may ignore incompatible packs and use the generic layout. Endianness conversion is a bounded decode operation.

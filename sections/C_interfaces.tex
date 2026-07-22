@@ -1,0 +1,301 @@
+\section{Reference Interfaces and Data Contracts}
+\label{app:interfaces}
+
+The following interfaces are normative at the semantic level. Names may change before a stable release, but an implementation must preserve the ownership and resource contracts.
+
+\subsection{Core value types}
+
+The descriptors below are immutable values shared by planning, execution, storage, diagnostics, and telemetry; they carry no implicit ownership.
+
+\begin{lstlisting}[language=Python,caption={Core immutable descriptors.}]
+from __future__ import annotations
+from dataclasses import dataclass
+from enum import Enum
+from typing import Mapping, Sequence, Tuple
+
+class NumericMode(str, Enum):
+    REFERENCE = "reference"
+    DETERMINISTIC = "deterministic"
+    STABLE = "stable"
+    FAST = "fast"
+    APPROXIMATE = "approximate"
+
+class TensorClass(str, Enum):
+    PARAMETER = "parameter"
+    ACTIVATION = "activation"
+    ACCUMULATOR = "accumulator"
+    KV_STATE = "kv_state"
+    OUTPUT = "output"
+    GRADIENT = "gradient"
+    OPTIMIZER = "optimizer"
+
+@dataclass(frozen=True, slots=True)
+class Tile:
+    origin: Tuple[int, ...]
+    extent: Tuple[int, ...]
+
+    def validate(self, shape: Sequence[int]) -> None:
+        if len(self.origin) != len(shape) or len(self.extent) != len(shape):
+            raise ValueError("tile rank mismatch")
+        for o, e, n in zip(self.origin, self.extent, shape, strict=True):
+            if o < 0 or e < 0 or o > n or e > n - o:
+                raise ValueError("tile outside logical tensor")
+
+@dataclass(frozen=True, slots=True)
+class ResourceVector:
+    bytes_by_arena: Mapping[str, int]
+    credits_by_queue: Mapping[str, int]
+
+@dataclass(frozen=True, slots=True)
+class VirtualTensorSpec:
+    tensor_id: str
+    storage_id: str
+    shape: Tuple[int, ...]
+    logical_dtype: str
+    storage_dtype: str
+    strides: Tuple[int, ...]
+    storage_offset_elements: int
+    tensor_class: TensorClass
+    immutable: bool
+    codec: str
+    version: int
+
+def checked_nbytes(shape: Sequence[int], itemsize: int, limit: int) -> int:
+    if itemsize <= 0:
+        raise ValueError("invalid item size")
+    value = itemsize
+    for dim in shape:
+        if dim < 0 or (dim and value > limit // dim):
+            raise OverflowError("tensor byte size exceeds configured limit")
+        value *= dim
+    return value
+\end{lstlisting}
+
+The actual implementation uses fixed-width checked integers in the native core. Python descriptors are validated before crossing the ABI.
+
+\subsection{Backend protocol}
+
+The backend boundary exposes bounded primitives and isolates vendor-specific streams, events, copies, kernels, and runtime reservations.
+
+\begin{lstlisting}[language=Python,caption={Backend contract.}]
+from typing import Protocol, Iterable, Optional
+
+@dataclass(frozen=True, slots=True)
+class KernelCapability:
+    op: str
+    implementation_id: str
+    dtypes: Tuple[str, ...]
+    deterministic: bool
+    min_alignment: int
+    shape_multiples: Tuple[int, ...]
+    max_workspace_bytes: int
+
+@dataclass(frozen=True, slots=True)
+class BackendCapabilities:
+    backend_id: str
+    devices: Tuple[str, ...]
+    arena_alignment: int
+    async_copy: bool
+    copy_compute_overlap: bool
+    direct_storage: bool
+    kernels: Tuple[KernelCapability, ...]
+
+class Event(Protocol):
+    @property
+    def terminal(self) -> bool: ...
+    def wait(self, timeout_s: Optional[float] = None) -> None: ...
+    def error(self) -> Optional[BaseException]: ...
+
+class BufferLease(Protocol):
+    @property
+    def arena_id(self) -> str: ...
+    @property
+    def size_bytes(self) -> int: ...
+    @property
+    def epoch(self) -> int: ...
+    def bind_terminal_event(self, event: Event) -> None: ...
+
+class Backend(Protocol):
+    def capabilities(self) -> BackendCapabilities: ...
+    def reserve_runtime(self, config: "BackendConfig") -> "BackendReservation": ...
+    def copy_async(
+        self, src: BufferLease, dst: BufferLease, *, stream: str
+    ) -> Event: ...
+    def launch(
+        self,
+        implementation_id: str,
+        inputs: Sequence[BufferLease],
+        outputs: Sequence[BufferLease],
+        workspace: Optional[BufferLease],
+        attributes: Mapping[str, object],
+        *,
+        stream: str,
+        wait_for: Sequence[Event],
+    ) -> Event: ...
+    def quiesce(self) -> None: ...
+\end{lstlisting}
+
+\code{launch} may not allocate material workspace outside the supplied lease. Any fixed context allocation occurs in \code{reserve\_runtime} and is charged to the backend reserve.
+
+\subsection{Storage protocol}
+
+The storage boundary is range-oriented, cancellation-aware, integrity-checking, and transactional so that no API requires whole-tensor materialization.
+
+\begin{lstlisting}[language=Python,caption={Range-oriented storage contract.}]
+@dataclass(frozen=True, slots=True)
+class ByteRange:
+    object_id: str
+    offset: int
+    length: int
+    checksum: str | None
+
+@dataclass(frozen=True, slots=True)
+class IORequest:
+    ranges: Tuple[ByteRange, ...]
+    priority: int
+    deadline_class: str
+    direct: bool
+    cancellation_id: str
+
+class TensorStore(Protocol):
+    def capabilities(self) -> "StoreCapabilities": ...
+    def read_async(self, req: IORequest, dst: BufferLease) -> Event: ...
+    def write_async(
+        self, req: IORequest, src: BufferLease, *, transaction_id: str
+    ) -> Event: ...
+    def publish(self, transaction_id: str, root_record: bytes) -> None: ...
+    def abort(self, transaction_id: str) -> None: ...
+    def close(self) -> None: ...
+\end{lstlisting}
+
+The store validates that the sum of range lengths equals or maps safely into the destination, and it reports short IO as an error. A direct path may impose stricter alignment; the planner sees those constraints.
+
+\subsection{Operator plugin protocol}
+
+An operator plugin owns semantic inference, minimum-working-set calculation, legal plan enumeration, reference behavior, and optional backward lowering.
+
+\begin{lstlisting}[language=Python,caption={Semantic operator and plan-provider contract.}]
+@dataclass(frozen=True, slots=True)
+class PlanContext:
+    capabilities: BackendCapabilities
+    budgets: ResourceVector
+    numeric_mode: NumericMode
+    request_bounds: Mapping[str, int]
+    layouts: Mapping[str, object]
+    calibration_id: str
+
+@dataclass(frozen=True, slots=True)
+class OperatorPlan:
+    implementation_id: str
+    resource_bound: ResourceVector
+    tile_parameters: Mapping[str, int]
+    task_template: bytes
+    numerical_contract: Mapping[str, object]
+    estimated_cost_ns: int
+
+class OperatorPlugin(Protocol):
+    op_name: str
+    schema_version: int
+
+    def infer(
+        self, inputs: Sequence[VirtualTensorSpec], attrs: Mapping[str, object]
+    ) -> Sequence[VirtualTensorSpec]: ...
+
+    def minimum_working_set(
+        self, inputs: Sequence[VirtualTensorSpec], attrs: Mapping[str, object],
+        ctx: PlanContext,
+    ) -> ResourceVector: ...
+
+    def enumerate_plans(
+        self, inputs: Sequence[VirtualTensorSpec], attrs: Mapping[str, object],
+        ctx: PlanContext,
+    ) -> Iterable[OperatorPlan]: ...
+
+    def reference(
+        self, logical_inputs: Sequence[object], attrs: Mapping[str, object]
+    ) -> Sequence[object]: ...
+
+    def backward_plugin(self) -> "OperatorPlugin | None": ...
+\end{lstlisting}
+
+A conformance runner checks that every emitted plan's observed allocations fit \code{resource\_bound}, including tail tiles and error paths.
+
+\subsection{Engine API}
+
+The public API separates model opening and preflight reservation from request execution, making the bounded-residency contract observable before the first token.
+
+\begin{lstlisting}[language=Python,caption={Public model/session API.}]
+@dataclass(frozen=True, slots=True)
+class RequestEnvelope:
+    max_prompt_tokens: int
+    max_new_tokens: int
+    max_batch: int = 1
+    max_beams: int = 1
+    max_speculative_tokens: int = 0
+
+@dataclass(frozen=True, slots=True)
+class PreflightResult:
+    accepted: bool
+    plan_id: str | None
+    reservation_id: str | None
+    memory_bound_bytes: Mapping[str, int]
+    spill_bound_bytes: int
+    estimated_physical_bytes: Mapping[str, int]
+    fallback_chain: Tuple[str, ...]
+    rejection: "AmsError | None"
+
+class ModelHandle(Protocol):
+    def preflight(
+        self, envelope: RequestEnvelope, policy: "ExecutionPolicy"
+    ) -> PreflightResult: ...
+    def open_session(
+        self, preflight: PreflightResult, request: "GenerationRequest"
+    ) -> "Session": ...
+    def close(self) -> None: ...
+
+class Session(Protocol):
+    def next_token(self) -> "TokenResult": ...
+    def stream(self) -> "Iterable[TokenResult]": ...
+    def cancel(self) -> None: ...
+    def checkpoint(self, uri: str) -> None: ...
+    def close(self) -> None: ...
+\end{lstlisting}
+
+\code{preflight} is required. A convenience \code{generate} may call it internally, but it returns the accepted plan summary and never executes under an unvalidated implicit budget.
+
+\subsection{Structured errors}
+
+Stable structured errors preserve machine-actionable category, phase, resource evidence, fallback history, and remediation details across language bindings.
+
+\begin{lstlisting}[language=Python,caption={Stable error payload.}]
+@dataclass(frozen=True, slots=True)
+class AmsError:
+    code: str
+    message: str
+    retryable: bool
+    phase: str
+    operator: str | None
+    graph_location: str | None
+    logical_tile: Tile | None
+    plan_id: str | None
+    cause_chain: Tuple[str, ...]
+    diagnostics: Mapping[str, object]
+\end{lstlisting}
+
+Diagnostics may contain sizes, capacities, file IDs, and backend codes, but never tensor contents, secrets, or raw prompts by default. Stable top-level codes are versioned; backend-specific details are nested.
+
+\subsection{Native ABI requirements}
+
+The C ABI passes opaque handles and plain fixed-layout structs with explicit size/version fields. It must provide:
+
+\begin{itemize}
+  \item create/destroy backend and store instances;
+  \item capability enumeration;
+  \item reserve/release arenas;
+  \item lease buffer and bind event;
+  \item submit copy/kernel/read/write;
+  \item poll/wait/cancel/quiesce;
+  \item return structured status without C++ exceptions crossing the boundary.
+\end{itemize}
+
+Every function documents thread safety, ownership transfer, reentrancy, callback context, and whether it may block. ABI conformance is fuzzed with invalid handles, sizes, versions, and callback races.

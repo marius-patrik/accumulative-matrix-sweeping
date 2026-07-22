@@ -1,0 +1,10 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+Accumulative Matrix Sweeping reframes model capacity as a scheduling problem over a memory hierarchy. Its core rule is simple: logical tensors are never equated with full fast-memory allocations; every supported operator has a bounded tile program; reductions carry only bounded summaries; and all material state, including weights, activations, outputs, KV cache, gradients, optimizer state, transfer buffers, and workspaces, participates in one resource contract.
+
+Under explicit finite-model, backing-capacity, primitive-support, and progress assumptions, a finite LLM request has an external-memory execution whose fast-memory requirement is independent of total parameter size. A preallocated arena and atomic resource admission turn this existence result into a runtime allocation bound. Two-dimensional matrix sweeping, online attention, streamed normalization and vocabulary selection, paged state, and scalar fallback make the invariant concrete across model families.
+
+The trade is equally explicit. Exact dense computation must consume the information in its weights, and a local machine with insufficient residency can become dominated by storage and interconnect bandwidth. \AMS does not erase that cost. It replaces an abrupt out-of-memory boundary with a continuous, observable time--memory curve, while allowing stronger hardware to choose larger tiles or conventional all-resident kernels.
+
+The appendices define the algorithms, interfaces, formats, repository, tests, and release gates needed to implement the system. The next scientific step is an open artifact and reproducible evaluation against layer offload, heterogeneous inference, KV paging, and local quantized runtimes across budgets that force sub-layer and sub-tensor execution. Only those measurements can establish where the universal fallback is practically useful and where the lower-bound costs dominate.

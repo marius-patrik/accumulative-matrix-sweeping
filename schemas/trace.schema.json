@@ -1,0 +1,530 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ams.local/schemas/trace.schema.json",
+  "title": "AMS Trace Bundle",
+  "description": "A bounded-cardinality execution trace bundle. Tensor values are excluded unless an explicitly unsafe capture policy is declared.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "trace_version",
+    "trace_id",
+    "clock",
+    "engine",
+    "plan_id",
+    "events",
+    "summary"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "ams.trace.bundle"
+    },
+    "trace_version": {
+      "$ref": "#/$defs/versionPair"
+    },
+    "trace_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 128
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "frequency_hz",
+        "origin_ns"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "monotonic",
+            "monotonic_raw",
+            "steady",
+            "distributed_synchronized"
+          ]
+        },
+        "frequency_hz": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "origin_ns": {
+          "$ref": "#/$defs/uint"
+        },
+        "max_sync_error_ns": {
+          "$ref": "#/$defs/uint"
+        }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine_id",
+        "software_fingerprint",
+        "hardware_fingerprint",
+        "calibration_id",
+        "config_hash"
+      ],
+      "properties": {
+        "engine_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "software_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "hardware_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "calibration_id": {
+          "$ref": "#/$defs/hash"
+        },
+        "config_hash": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "model_root": {
+      "$ref": "#/$defs/hash"
+    },
+    "graph_hash": {
+      "$ref": "#/$defs/hash"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/hash"
+    },
+    "reservation_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "session_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "request_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "redaction_policy": {
+      "enum": [
+        "strict",
+        "metadata_only",
+        "debug_unsafe"
+      ]
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 100000000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sequence",
+          "timestamp_ns",
+          "event_type",
+          "phase",
+          "subsystem"
+        ],
+        "properties": {
+          "sequence": {
+            "$ref": "#/$defs/uint"
+          },
+          "timestamp_ns": {
+            "$ref": "#/$defs/uint"
+          },
+          "duration_ns": {
+            "$ref": "#/$defs/uint"
+          },
+          "event_type": {
+            "enum": [
+              "preflight",
+              "reservation",
+              "task_state",
+              "lease",
+              "io",
+              "copy",
+              "kernel",
+              "reduce",
+              "transaction",
+              "cache",
+              "scheduler",
+              "replan",
+              "output",
+              "error",
+              "metric_sample",
+              "session"
+            ]
+          },
+          "phase": {
+            "enum": [
+              "open",
+              "preflight",
+              "prefill",
+              "decode",
+              "forward",
+              "backward",
+              "optimizer",
+              "recovery",
+              "shutdown"
+            ]
+          },
+          "subsystem": {
+            "$ref": "#/$defs/identifier"
+          },
+          "session_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "request_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "epoch": {
+            "$ref": "#/$defs/uint"
+          },
+          "task_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "task_kind": {
+            "enum": [
+              "read",
+              "verify",
+              "decode",
+              "copy",
+              "compute",
+              "reduce",
+              "commit",
+              "evict",
+              "control"
+            ]
+          },
+          "task_state": {
+            "enum": [
+              "created",
+              "ready",
+              "leased",
+              "submitted",
+              "completing",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "retrying"
+            ]
+          },
+          "operator_node_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "implementation_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "tensor_id_hash": {
+            "$ref": "#/$defs/hash"
+          },
+          "tile_origin": {
+            "$ref": "#/$defs/shape"
+          },
+          "tile_extent": {
+            "$ref": "#/$defs/shape"
+          },
+          "resource_deltas": {
+            "type": "array",
+            "maxItems": 4096,
+            "items": {
+              "$ref": "#/$defs/resourceDelta"
+            }
+          },
+          "bytes": {
+            "$ref": "#/$defs/uint"
+          },
+          "source_resource": {
+            "$ref": "#/$defs/identifier"
+          },
+          "destination_resource": {
+            "$ref": "#/$defs/identifier"
+          },
+          "queue_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "dependencies": {
+            "type": "array",
+            "maxItems": 100000,
+            "items": {
+              "$ref": "#/$defs/identifier"
+            }
+          },
+          "cache_result": {
+            "enum": [
+              "hit",
+              "miss",
+              "bypass",
+              "evict",
+              "not_applicable"
+            ]
+          },
+          "retry_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "error": {
+            "$ref": "#/$defs/error"
+          },
+          "attributes": {
+            "$ref": "#/$defs/extensions"
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start_ns",
+        "end_ns",
+        "outcome",
+        "high_water",
+        "physical_bytes",
+        "task_counts"
+      ],
+      "properties": {
+        "start_ns": {
+          "$ref": "#/$defs/uint"
+        },
+        "end_ns": {
+          "$ref": "#/$defs/uint"
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "high_water": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "resource_id",
+              "reserved",
+              "peak"
+            ],
+            "properties": {
+              "resource_id": {
+                "$ref": "#/$defs/identifier"
+              },
+              "reserved": {
+                "$ref": "#/$defs/uint"
+              },
+              "peak": {
+                "$ref": "#/$defs/uint"
+              }
+            }
+          }
+        },
+        "physical_bytes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read",
+            "written",
+            "copied"
+          ],
+          "properties": {
+            "read": {
+              "$ref": "#/$defs/uint"
+            },
+            "written": {
+              "$ref": "#/$defs/uint"
+            },
+            "copied": {
+              "$ref": "#/$defs/uint"
+            }
+          }
+        },
+        "task_counts": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/uint"
+          },
+          "maxProperties": 128
+        },
+        "tokens": {
+          "$ref": "#/$defs/uint"
+        },
+        "time_to_first_token_ns": {
+          "$ref": "#/$defs/uint"
+        },
+        "inter_token_latency_ns": {
+          "type": "array",
+          "maxItems": 10000000,
+          "items": {
+            "$ref": "#/$defs/uint"
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      }
+    },
+    "extensions": {
+      "$ref": "#/$defs/extensions"
+    }
+  },
+  "$defs": {
+    "uint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "positiveInt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^(sha256|sha512|blake3):[0-9a-f]+$",
+      "maxLength": 1024
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}$",
+      "maxLength": 512
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+      "maxLength": 128
+    },
+    "versionPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
+    "shape": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/uint"
+      }
+    },
+    "dtype": {
+      "type": "string",
+      "enum": [
+        "bool",
+        "uint8",
+        "int8",
+        "uint16",
+        "int16",
+        "uint32",
+        "int32",
+        "uint64",
+        "int64",
+        "float8_e4m3fn",
+        "float8_e5m2",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
+        "int2_grouped",
+        "int3_grouped",
+        "int4_grouped",
+        "int8_grouped",
+        "custom"
+      ]
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9.-]{1,127}$"
+      },
+      "additionalProperties": true,
+      "maxProperties": 256
+    },
+    "resourceDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource_id",
+        "delta",
+        "after"
+      ],
+      "properties": {
+        "resource_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "delta": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "after": {
+          "$ref": "#/$defs/uint"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "category",
+        "message",
+        "retriable"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/identifier"
+        },
+        "category": {
+          "enum": [
+            "preflight",
+            "package",
+            "integrity",
+            "capability",
+            "plan",
+            "resource",
+            "io",
+            "backend",
+            "numeric",
+            "transaction",
+            "deadline",
+            "cancelled",
+            "internal"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "retriable": {
+          "type": "boolean"
+        },
+        "cause_code": {
+          "$ref": "#/$defs/identifier"
+        },
+        "details": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
+    }
+  }
+}

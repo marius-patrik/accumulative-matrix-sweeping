@@ -1,0 +1,100 @@
+\section{Numerical Semantics, Stability, and Reproducibility}
+\label{sec:numerics}
+
+Tiling changes the grouping and possibly the order of floating-point operations. A correct system must state whether it preserves a scalar order, provides a bounded numerically equivalent result, or intentionally approximates the model.
+
+\subsection{Floating-point model}
+
+For a basic operation $\circ$, use the standard model
+\[
+  \fl(a\circ b)=(a\circ b)(1+\delta),\qquad |\delta|\le u,
+\]
+when no overflow or underflow exception invalidates the model, with unit roundoff $u$ \cite{higham2002accuracy,ieee754}. Define
+\[
+  \gamma_k=\frac{ku}{1-ku}
+\]
+for $ku<1$.
+
+A length-$n$ sequential dot product in a fixed format has the familiar componentwise forward-error bound
+\[
+  |\fl(x^{\mathsf T}w)-x^{\mathsf T}w|
+  \le \gamma_n |x|^{\mathsf T}|w|.
+\]
+This holds after accounting for the precise multiply/add or fused multiply-add model. Partitioning into tiles does not remove this error; a second-level summation of tile partials can add rounding relative to a single kernel's internal tree.
+
+\subsection{Reduction modes}
+
+\AMS exposes four accumulation policies.
+
+\paragraph{Reference order.}
+Reduction coordinates are processed in a canonical scalar order, and each multiply-add uses the declared primitive. This is the differential-test oracle and can target bitwise repeatability on one backend. It is slow.
+
+\paragraph{Deterministic tree.}
+The plan fixes tile partition, local kernel algorithm, and a stable pairwise merge tree. Repeated execution on the same compatible backend and software stack returns the same bits. Different backend kernels may still differ unless a cross-backend reference primitive is enforced.
+
+\paragraph{Stable high-precision.}
+Inputs may be low precision, but accumulators use FP32, FP64, or bounded integer types; reductions use pairwise or compensated summation where useful. The goal is a smaller error, not matching a conventional kernel's bits.
+
+\paragraph{Fast equivalent.}
+The backend may select efficient fused and parallel reductions within a declared tolerance. Determinism is not guaranteed if atomic or concurrent reduction order varies.
+
+The mode is part of the plan hash. A runtime cannot switch from deterministic to fast mode under memory pressure.
+
+\subsection{Tile-reduction error}
+
+Suppose a dot product is divided into $r$ blocks of lengths $n_c$. Let $\widehat s_c$ be each block result and let the block results be summed sequentially. A conservative bound is
+\[
+  |\widehat s-s|
+  \lesssim
+  \sum_{c=1}^r \gamma_{n_c}|x_c|^{\mathsf T}|w_c|
+  +\gamma_r\sum_{c=1}^r|\widehat s_c|.
+\]
+Pairwise summation of block results changes the second term to a depth-dependent bound with $O(\log r)$ stages. The planner can therefore trade accumulator workspace and synchronization for stability. Exact tests over integers or rationals verify partition logic separately from floating behavior.
+
+\subsection{Online softmax stability}
+
+The running-maximum recurrence in Proposition~\ref{prop:online-softmax} avoids exponentiating values above zero and is the standard stable form for streamed softmax. Accumulators $m$, $\ell$, and $O$ should generally use at least FP32 even when Q/K/V storage is FP16 or BF16. All-masked rows, infinities, NaNs, and zero normalizers require explicit semantics matching the reference framework or model contract.
+
+Changing KV block order changes floating additions. Deterministic mode uses logical token order or a fixed merge tree. Sparse masks must not cause backend-dependent iteration order.
+
+\subsection{Normalization stability}
+
+LayerNorm should use Welford's recurrence or a two-pass centered variance rather than $\sum x^2-(\sum x)^2/n$ in low precision. RMSNorm sums squares in the accumulator dtype. Epsilon is applied exactly at the model-defined position. The converter preserves scalar constants without unintended dtype narrowing.
+
+\subsection{Quantization semantics}
+
+A quantized tensor descriptor records:
+
+\begin{itemize}
+  \item logical and storage dtype;
+  \item scale and zero-point dtype and granularity;
+  \item symmetric/asymmetric convention;
+  \item group axes and group size;
+  \item rounding and saturation rules;
+  \item outlier or mixed-format representation;
+  \item calibration/provenance and expected error tests.
+\end{itemize}
+
+Dequantization is a semantic operator, not a byte cast. Quantized matrix kernels must be compared to a reference implementation of the same quantized model, not automatically to the original unquantized checkpoint. Optional quantization does not alter the exact-mode executability theorem.
+
+\subsection{Overflow, underflow, and non-finite policy}
+
+Plans declare accumulator range assumptions. Integer quantized kernels use widths sufficient for the maximum tile reduction or periodically widen/commit partials. Floating kernels may use scaling or higher precision. Strict mode detects non-finite accumulator tiles and reports the operator, logical coordinates, input versions, and plan ID. Permissive mode propagates values according to IEEE and model semantics.
+
+\subsection{Randomness}
+
+Counter-based RNG is indexed by logical computation coordinates so physical task order, prefetch, and retry do not consume different random numbers. For sampling, the counter includes request ID, committed token ordinal, and sampling suboperation. For training dropout, it includes step, microbatch, operator, and element coordinates.
+
+A retried pure task must regenerate the same random values. A task whose randomness is intentionally non-replayable is non-idempotent and requires durable output before acknowledgement.
+
+\subsection{Numerical conformance tests}
+
+Each operator implementation is tested in three layers:
+
+\begin{enumerate}
+  \item exact small-shape tests over integers, booleans, or high-precision arithmetic validate partitions and indexing;
+  \item differential floating tests compare random and adversarial inputs against a reference implementation under mode-specific tolerances;
+  \item metamorphic tests vary tile sizes, loop orders, buffer depth, storage placement, and backend while checking expected invariance or bounded deviation.
+\end{enumerate}
+
+Adversarial suites include cancellation-prone sums, extreme softmax logits, all-masked attention rows, denormals, signed zeros, NaNs/infinities, quantization boundaries, odd tails, empty tensors, and maximum declared shapes. Release reports publish both maximum observed error and tolerance rationale.

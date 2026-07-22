@@ -1,0 +1,164 @@
+\section{Resource-Aware Planning and Cost Modeling}
+\label{sec:planning}
+
+The planner converts a functional logical graph and a request envelope into a finite task template whose resource bounds are admissible and whose estimated cost is minimal among considered legal plans. Correctness and fit are hard constraints; performance is the objective.
+
+\subsection{Planner inputs}
+
+The planner receives:
+
+\begin{itemize}
+  \item graph IR, symbolic shapes, alias sets, and operator semantics;
+  \item checkpoint manifest, physical layouts, codecs, and storage topology;
+  \item backend capabilities, supported kernels, dtype rules, and workspace bounds;
+  \item calibrated transfer and compute models;
+  \item per-tier reservations, concurrency limits, and tenant quotas;
+  \item request envelope: batch/token bounds, context bound, beam/speculation policy, and generation horizon;
+  \item numerical, determinism, reliability, latency, throughput, and energy policy;
+  \item cache state or a conservative cold-cache assumption.
+\end{itemize}
+
+The output is a plan as defined in Section~\ref{sec:model}, plus a structured explanation of rejected alternatives.
+
+\subsection{Preflight and reservations}
+
+Preflight proceeds from slowest to fastest constraints:
+
+\begin{enumerate}
+  \item validate manifest, model/operator compatibility, finite shape bounds, and storage byte ranges;
+  \item calculate checkpoint, session-state, worst-case KV, activation spill, training state, journal, and temporary conversion requirements;
+  \item choose candidate backends and reserve fixed runtime bases, including library contexts and communicators;
+  \item request a device/DRAM arena under configured quotas rather than consuming all observed free memory;
+  \item generate a minimum-working-set plan for every operator; if a device plan fails, shrink tile classes and then try the next backend;
+  \item solve or heuristically select a graph plan and validate aggregate liveness and spill;
+  \item preallocate or hard-limit arenas and issue an immutable reservation token;
+  \item dry-run metadata-only task expansion and verify every resource vector against the token.
+\end{enumerate}
+
+Global free-memory telemetry may inform the amount requested, but the accepted amount is the reservation actually obtained. The runtime keeps a safety margin for driver state, display usage, framework internals, and explicitly identified external consumers.
+
+\subsection{Per-tile cost model}
+
+For a task or pipeline stage $u$, define
+\begin{align}
+T_{\mathrm{storage}}(u)&=\lambda_s(n_u,s_u)+\frac{s_u}{B_s(s_u,n_u)},\\
+T_{\mathrm{link}}(u)&=\lambda_p(c_u,s'_u)+\frac{s'_u}{B_p(s'_u,c_u)},\\
+T_{\mathrm{compute}}(u)&=\lambda_k(k_u)+\frac{f_u}{F_k(\text{shape},d,\text{layout})},
+\end{align}
+where $n_u$ is read count, $s_u$ storage bytes, $c_u$ copy count, $s'_u$ link bytes, $f_u$ operations, and all rates are empirically calibrated. Decode/dequantization CPU time, output spill, and synchronization are separate terms.
+
+For a stable $q$-stage overlapped pipeline, a first-order estimate is
+\begin{equation}
+\label{eq:pipeline-cost}
+T(P)\approx T_{\mathrm{fill}}+T_{\mathrm{drain}}
+ +N\max(T_{\mathrm{storage}},T_{\mathrm{decode}},T_{\mathrm{link}},T_{\mathrm{compute}})
+ +T_{\mathrm{contention}}.
+\end{equation}
+When the backend cannot overlap stages, the model uses the appropriate sum. Calibration stores confidence intervals and falls back to conservative upper estimates when a size/layout pair is unmeasured.
+
+\subsection{IO and reuse accounting}
+
+The planner counts physical bytes, not logical tensor bytes. It includes alignment, filesystem blocks, codec metadata, page-cache behavior, and repeated reads induced by loop order. For an output-stationary linear plan,
+\[
+  Q_W=\sum_{a,b,c}\bytes(W_{I_b,J_c}).
+\]
+After cache reuse; an input-stationary plan may reduce $Q_X$ at the cost of output spill. The model estimates:
+
+\begin{itemize}
+  \item checkpoint reads by tier and read-size distribution;
+  \item host-to-device and device-to-host bytes;
+  \item accumulator and activation spill/readback;
+  \item KV page reads per token;
+  \item cache hit probability for hot tiles;
+  \item decompression and repacking bytes;
+  \item write amplification and durability costs in training.
+\end{itemize}
+
+Small random reads are penalized because persistent storage often delivers lower effective bandwidth than large contiguous reads. Tile-major packing and row/column bundling follow the same hardware-aware principle explored by LLM in a Flash \cite{alizadeh2023llmflash}.
+
+\subsection{Candidate generation}
+
+Each operator plugin provides a finite candidate family rather than an unbounded integer search. For a linear operator, candidate dimensions derive from:
+
+\begin{itemize}
+  \item backend kernel multiples and maximum dimensions;
+  \item powers of two and storage-page/alignment boundaries;
+  \item full logical dimensions when they fit;
+  \item measured sweet spots for GEMM and transfer sizes;
+  \item a guaranteed descending chain ending at the minimum working set.
+\end{itemize}
+
+For every tile tuple, the plugin enumerates legal loop orders, buffer depth, layouts, accumulator modes, fusion choices, and placement paths. It rejects resource-infeasible candidates before cost evaluation. Tail behavior is explicitly modeled rather than assumed negligible.
+
+\subsection{Graph-level liveness and fusion}
+
+Operator-local minima can be globally poor. The graph planner computes liveness intervals for virtual values and identifies tile pipelines that avoid external materialization. Examples include:
+
+\begin{itemize}
+  \item Q/K/V projection tiles feeding attention without complete Q, K, or V materialization;
+  \item gated MLP intermediate tiles feeding the down projection;
+  \item residual-add plus normalization with a shared input tile;
+  \item LM-head logits feeding top-$k$ without storing the vocabulary vector;
+  \item KV projection tiles appended directly into cache pages.
+\end{itemize}
+
+Fusion is represented as a compound plan with one resource proof. It may be disabled for debugging, deterministic order, backend limitations, or because it increases rereads. The compiler never fuses across mutation, alias, numerical, or control-flow barriers without an equivalence rule.
+
+\subsection{Optimization formulation}
+
+A complete optimizer can formulate plan selection as a mixed-integer program similar in spirit to heterogeneous placement optimization in FlexGen \cite{sheng2023flexgen}. A production default should use a faster staged heuristic:
+
+\begin{enumerate}
+  \item select legal per-operator candidates on the Pareto frontier of time, device bytes, host bytes, and spill bytes;
+  \item apply graph rewrite templates and recompute frontiers;
+  \item run beam search or dynamic programming over block/layer boundaries with bounded frontier size;
+  \item reserve a global KV and request-state budget;
+  \item simulate task liveness and reject any plan that violates the exact broker model;
+  \item locally tune tile sizes using calibration data;
+  \item retain the safest candidate and at least one smaller fallback.
+\end{enumerate}
+
+The optimization objective may be
+\[
+  \min_P\; w_L T_{p99}(P)+w_T/T_{\mathrm{throughput}}(P)
+  +w_EE(P)+w_WQ_{\mathrm{write}}(P),
+\]
+subject to hard capacities, numeric semantics, and service-level constraints. Weights are policy, not embedded constants.
+
+\subsection{Prefill and decode plans}
+
+Prefill has many token rows and often achieves high GEMM efficiency; decode has few rows and is weight-bandwidth dominated. A single plan is therefore rarely optimal.
+
+The prefill plan favors large token tiles, batched attention blocks, and activation reuse. The decode plan favors weight caching, request cohorting, grouped GEMV/GEMM, and low-latency priorities. The runtime may switch plans at a token boundary after all mutable tiles are committed. Prompt chunks can use a sequence of shape-specialized plans.
+
+\subsection{Adaptive pressure and replanning}
+
+Within a valid reservation, cache occupancy can change freely. Changing arena capacity or tile shape requires a safe-point replan:
+
+\begin{enumerate}
+  \item stop admitting tasks that cross the designated boundary;
+  \item let in-flight tasks finish or cancel them according to idempotence policy;
+  \item commit dirty state and release plan-specific leases;
+  \item obtain a new reservation and validate a smaller or alternate plan;
+  \item resume from the last committed virtual-tensor versions.
+\end{enumerate}
+
+A sudden external memory-pressure signal may trigger cache eviction immediately, but it cannot justify breaking active leases. If a cooperative platform revokes reserved capacity, the runtime returns \code{RESERVATION\_LOST} or migrates at a safe point; it does not recursively catch OOM inside arbitrary kernels and hope that a smaller tile is semantically restartable.
+
+\subsection{Plan cache and reproducibility}
+
+A plan-cache key includes model content hash, graph hash, operator-plugin versions, backend and driver fingerprint, device topology, storage identity, calibrated profile version, request envelope, and numerical policy. Cached plans are revalidated against current reservations and file hashes. The plan and calibration snapshot are attached to traces so a performance or numerical incident can be replayed.
+
+\subsection{Planner acceptance properties}
+
+Before release, property tests must establish that for random legal shapes and budgets:
+
+\begin{itemize}
+  \item candidate generation always reaches a minimum-working-set candidate when preconditions hold;
+  \item no accepted resource vector exceeds its tier budget;
+  \item partition covers and reduction dependencies are complete;
+  \item smaller budgets never force an undeclared approximation;
+  \item cost estimates use physical byte ranges and bounded workspaces;
+  \item the selected plan is no worse than the explicitly retained safe fallback under the same model;
+  \item serialization and deserialization preserve all proof-relevant fields.
+\end{itemize}

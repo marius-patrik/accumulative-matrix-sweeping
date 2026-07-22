@@ -1,0 +1,120 @@
+\section{Detailed Proofs}
+\label{app:proofs}
+
+This appendix expands the proof sketches in Section~\ref{sec:theory}. The results are intentionally stated for finite supported computations; they do not assert a performance bound beyond finiteness.
+
+\subsection{Scalarization of tensor programs}
+
+\begin{lemma}[Finite scalarization]
+\label{lem:scalarization}
+Let $G$ be a finite executed trace of tensor operators. Suppose each operator has finite input/output shapes on the trace and a semantic definition that expands into finitely many scalar primitives from $\mathcal P$. Then $G$ expands into a finite scalar directed acyclic graph after representing loop-carried state by value versions.
+\end{lemma}
+
+\begin{proof}
+Every tensor has finitely many logical elements because all dimensions are finite. By hypothesis, each operator invocation expands into finitely many scalar primitive invocations and dependencies. The executed trace has finitely many operator invocations. Their disjoint union plus edges induced by tensor element dependencies is finite. Mutation or loop-carried state is transformed into static single assignment versions for the finite trace, so dependencies point from earlier versions to later versions. A terminating sequential trace cannot contain a value-dependency cycle without a delayed state edge; versioning breaks such edges. Hence the expanded graph is finite and acyclic.
+\end{proof}
+
+\begin{lemma}[Bounded scalar evaluator]
+\label{lem:scalar-evaluator}
+Let $D$ be a finite scalar DAG over primitives of maximum encoded operand/result working set $\mu_{\mathcal P}$. If all inputs and a map from node identifiers to spill locations fit in backing storage, then $D$ can be evaluated with fast-memory use at most $R+\mu_{\mathcal P}+O(1)$ metadata.
+\end{lemma}
+
+\begin{proof}
+Choose a topological ordering $v_1,\ldots,v_N$. Persist source values. For $i=1,
+\ldots,N$, read the operands named by predecessors of $v_i$, execute the primitive, and write the result to the spill location associated with $v_i$. The evaluator stores only one primitive working set and a bounded descriptor at a time. The node-to-location map may itself reside in backing storage and be read in bounded records; alternatively, locations can be computed from a fixed-width index. Values whose final consumer has executed may be reclaimed, but reclamation is not required for the fast-memory bound. The result follows.
+\end{proof}
+
+\begin{proof}[Full proof of Theorem~\ref{thm:external-eval}]
+Apply Lemma~\ref{lem:scalarization} to obtain a finite scalar DAG and Lemma~\ref{lem:scalar-evaluator} to evaluate it. Every read, primitive, and write completes in finite time by assumption, and a finite sum of finite durations is finite. The working set depends on the primitive set and runtime, not the number of parameters or DAG nodes.
+\end{proof}
+
+\begin{remark}[Metadata size]
+A naive topological schedule stored entirely in fast memory would violate the stated independence for a very large graph. The construction stores graph, indices, and value-location metadata in backing storage or generates them from compact parametric loops. The runtime implementation likewise instantiates only a bounded task window.
+\end{remark}
+
+\subsection{Bounded arena proof with asynchronous work}
+
+Let each lease $\ell$ have byte charge $r_k(\ell)$ in tier $k$ and terminal event $e(\ell)$. A lease remains active until $e(\ell)$ is terminal, even if its owning language-level object is unreachable.
+
+\begin{lemma}[No early reuse]
+\label{lem:no-early-reuse}
+If an arena block is returned to the free set only after the terminal event of its current epoch, no two nonterminal operations receive overlapping writable blocks with the same epoch.
+\end{lemma}
+
+\begin{proof}
+A block is absent from the free set while its lease is active. Allocation draws only from the free set and increments the block epoch. Therefore a second lease cannot receive the block before the first terminal event, and after reuse it has a distinct epoch. Debug-time epoch validation detects stale views.
+\end{proof}
+
+\begin{proof}[Full proof of Theorem~\ref{thm:memory-bound}]
+At arena creation, total managed addressable bytes plus fixed reserve equal at most $C_k$. Atomic admission subtracts the class-rounded charge of every new lease from available credits and refuses when insufficient. Completion adds exactly the charge back after Lemma~\ref{lem:no-early-reuse}. By induction over admission and completion transitions, active charges never exceed arena capacity. Fixed metadata and alignment losses are included in class rounding or reserve. No task can allocate outside leases by hypothesis, and kernel workspace is a lease, so managed peak is bounded. Parameter-size independence follows because the plan fixes maximum in-flight tile sizes and represents all other regions virtually.
+\end{proof}
+
+\subsection{Scheduler progress with errors and cancellation}
+
+Let a terminal state be success, failure, or cancellation. A failed task marks all not-yet-submitted descendants terminally cancelled unless a retry or alternative replica edge is selected. A submitted task is allowed to finish and then releases resources.
+
+\begin{lemma}[Ready-node existence]
+\label{lem:ready-node}
+In a finite DAG with unfinished nodes, after treating terminal predecessors as resolved according to the error propagation rule, either a terminal request condition has been reached or at least one unfinished node is ready.
+\end{lemma}
+
+\begin{proof}
+Consider the subgraph induced by unfinished nodes. If it is empty, the request is terminal. Otherwise, every finite DAG has a source. Its predecessors lie outside the unfinished subgraph and are therefore terminal/resolved, so it is ready unless the request's error rule has already made it terminal, in which case remove it and repeat.
+\end{proof}
+
+\begin{proof}[Full proof of Theorem~\ref{thm:progress}]
+Let $n$ be the number of unfinished nodes. For $n=0$, the result is immediate. For $n>0$, Lemma~\ref{lem:ready-node} gives a ready node unless the request is already terminal. By the fit hypothesis and fair scheduling, some fit ready node is eventually admitted. Atomic complete-vector admission eliminates resource hold-and-wait. Eventual service makes the task terminal, and completion processing releases all leases. Error propagation may make additional nodes terminal. Thus the number of unfinished nodes decreases. Induction reaches zero. Cancellation uses the same argument after preventing new admissions and treating pending nodes as cancelled; submitted nodes complete or fail under eventual service.
+\end{proof}
+
+The fit hypothesis is enforced by compilation: every operator template has at least one minimum candidate, and the executor does not create a phase in which all ready nodes require mutually unavailable plan-specific resources. Resource classes needed only by future phases are not permanently pinned by the current phase unless included in the global feasibility simulation.
+
+\subsection{Linear sweep correctness with spill}
+
+For each coordinate $(r,i)$,
+\[
+  A_{r,i}^{(0)}=b_i,
+  \qquad
+  A_{r,i}^{(c+1)}=A_{r,i}^{(c)}+
+  \sum_{j\in J_c}X_{r,j}W_{i,j}.
+\]
+By induction,
+\[
+  A_{r,i}^{(q)}=b_i+
+  \sum_{c=0}^{q-1}\sum_{j\in J_c}X_{r,j}W_{i,j}.
+\]
+Because the $J_c$ form a disjoint cover, this is $b_i+\sum_{j=0}^{n-1}X_{r,j}W_{i,j}$. Writing $A^{(c)}$ to external storage and reading it before the next update is an identity transformation in the exact storage model. Checksums and version IDs ensure the implementation reads the same value.
+
+If reduction blocks are processed in parallel, each worker $s$ returns
+\[
+  A^{[s]}_{r,i}=\sum_{j\in J^{[s]}}X_{r,j}W_{i,j}.
+\]
+A final reduction over a disjoint cover plus one bias application is algebraically identical. Floating order is governed separately.
+
+\subsection{Online softmax proof for blocks}
+
+Let $A$ be the set of scores processed before a block and $B$ the new scores. Assume
+\[
+  m_A=\max_{j\in A}s_j,
+  \quad \ell_A=\sum_{j\in A}e^{s_j-m_A},
+  \quad O_A=\sum_{j\in A}e^{s_j-m_A}V_j.
+\]
+Set $m=\max(m_A,\max_{j\in B}s_j)$. Then
+\[
+  e^{m_A-m}\ell_A
+  =\sum_{j\in A}e^{s_j-m}
+\]
+and similarly for $O_A$. Adding the $B$ terms yields the invariant for $A\cup B$. At completion,
+\[
+  \frac{O}{\ell}
+  =\frac{\sum_j e^{s_j-m}V_j}{\sum_j e^{s_j-m}}
+  =\sum_j\operatorname{softmax}(s)_jV_j.
+\]
+Masked entries are omitted or assigned score $-\infty$. If all entries are masked, the model/framework-specific result must be defined separately because the mathematical denominator is zero.
+
+\subsection{Dense read lower bound and representations}
+
+Theorem~\ref{thm:dense-lower-bound} is stated in terms of inspecting entries or information sufficient to distinguish them. This accommodates compressed representations. Lossless compression may encode several entries jointly; the algorithm need not read $mn$ physical words, but it must consume enough information to distinguish every arbitrary matrix in the supported set. For a fixed finite field with $q$ values, arbitrary matrices contain $mn\log_2q$ bits of information. A representation-specific lower bound follows from its code length. Structured, sparse, generated, or lossy models restrict the set and can evade the arbitrary-dense premise.
+
+\subsection{Fast-memory independence versus total storage}
+
+The theorems do not say that total memory use is independent of model size. Backing storage contains at least the model representation, and a naive scalar evaluator may spill many intermediates. The precise claim is that the capacity of the compute-nearest admitted working set need not scale with the total parameter bytes. Practical plans also bound host cache and pinned memory independently, while slow-tier capacity scales with model and request state.

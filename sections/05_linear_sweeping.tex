@@ -1,0 +1,209 @@
+\section{Accumulative Matrix Sweeping}
+\label{sec:linear}
+
+Dense and quantized linear maps dominate parameter volume in many LLMs. This section defines the reference \AMS operator precisely, including the cases where neither a weight row, the complete input, nor the complete output fits in the compute tier.
+
+\subsection{Logical operation and tiling}
+
+Consider
+\[
+  Y=XW^{\mathsf T}+\mathbf 1b^{\mathsf T},
+  \qquad
+  X\in\mathbb F^{p\times n},\quad
+  W\in\mathbb F^{m\times n},\quad
+  Y\in\mathbb F^{p\times m}.
+\]
+The leading dimension $p$ may combine batch, sequence, beam, or token groups. Choose ordered partitions
+\[
+  [0,p)=\bigsqcup_a P_a,
+  \qquad [0,m)=\bigsqcup_b I_b,
+  \qquad [0,n)=\bigsqcup_c J_c.
+\]
+For each output tile, initialize
+\[
+  A_{a,b}\leftarrow \mathbf 1 b_{I_b}^{\mathsf T},
+\]
+then sweep the reduction blocks:
+\begin{equation}
+\label{eq:ams-update}
+  A_{a,b}\leftarrow A_{a,b}\boxplus
+  \operatorname{GEMM}\!
+  \left(X_{P_a,J_c},W_{I_b,J_c}^{\mathsf T}\right).
+\end{equation}
+Here $\boxplus$ is the declared accumulation operation, which may be direct floating addition, pairwise reduction, compensated addition, integer accumulation for quantized kernels, or an exact test semiring. When all $J_c$ are processed, $A_{a,b}$ is committed as $Y_{P_a,I_b}$.
+
+Every logical dimension is therefore virtualizable. If one row of $W$ exceeds fast memory, shrink $J_c$. If the output exceeds fast memory, shrink $P_a$ or $I_b$ and spill completed tiles. If the activation slice exceeds fast memory, shrink $P_a$ or $J_c$. The minimum nontrivial plan can operate on one output scalar and one reduction scalar at a time.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  cell/.style={draw,minimum width=9mm,minimum height=7mm,inner sep=0pt},
+  arr/.style={-{Latex[length=2mm]},thick},
+  label/.style={font=\small,align=center}
+]
+  \node[label] at (0,2.5) {$X_{P_a,J_c}$};
+  \foreach \r in {0,...,2}{\foreach \c in {0,...,4}{
+    \node[cell,fill=blue!12] at (-1.8+0.45*\c,1.5-0.35*\r) {};
+  }}
+  \node[label] at (3.2,2.5) {$W_{I_b,J_c}$};
+  \foreach \r in {0,...,3}{\foreach \c in {0,...,4}{
+    \node[cell,fill=orange!15] at (2.3+0.45*\c,1.68-0.35*\r) {};
+  }}
+  \node[label] at (7,2.5) {$A_{P_a,I_b}$};
+  \foreach \r in {0,...,2}{\foreach \c in {0,...,3}{
+    \node[cell,fill=green!15] at (6.2+0.45*\c,1.5-0.35*\r) {};
+  }}
+  \draw[arr] (0.7,1.15) -- (1.55,1.15);
+  \draw[arr] (4.8,1.15) -- (5.55,1.15);
+  \node[label] at (1.1,0.55) {stream};
+  \node[label] at (5.18,0.55) {$+$};
+  \draw[decorate,decoration={brace,amplitude=4pt}] (-2.05,0.2) -- (0.25,0.2)
+    node[midway,below=5pt,font=\small] {batch/token tile};
+  \draw[decorate,decoration={brace,amplitude=4pt}] (2.05,0.02) -- (4.35,0.02)
+    node[midway,below=5pt,font=\small] {output/reduction tile};
+  \draw[decorate,decoration={brace,amplitude=4pt}] (5.95,0.2) -- (7.8,0.2)
+    node[midway,below=5pt,font=\small] {bounded accumulator};
+\end{tikzpicture}
+\caption{A true \AMS linear step tiles the output and reduction axes. The accumulator is bounded; it need not be the full output tensor.}
+\label{fig:matrix-sweep}
+\end{figure}
+
+\subsection{Loop-order families}
+
+The same block equation admits several schedules. The planner selects among them based on reuse, storage layout, and request phase.
+
+\paragraph{Output-stationary sweep.}
+For each $(P_a,I_b)$, keep $A_{a,b}$ resident and iterate $J_c$. This minimizes accumulator traffic and is the safest baseline. It may reread $X_{P_a,J_c}$ for each output block.
+
+\paragraph{Input-stationary sweep.}
+Keep $X_{P_a,J_c}$ resident while multiplying several $I_b$ blocks. This amortizes activation reads and host-to-device copies, at the cost of several accumulators or repeated output spill. It is attractive for prefill, where $P_a$ is large enough for efficient GEMM.
+
+\paragraph{Weight-stationary reuse.}
+Keep $W_{I_b,J_c}$ resident across several token or microbatch tiles. This is valuable in continuous batching and decode, where one weight tile can serve many requests. The scheduler may form a cohort of compatible tokens before evicting the tile.
+
+\paragraph{Layer-stationary or cache-resident path.}
+If the complete weight is admitted, choose one tile and call the optimized conventional kernel. The virtual abstraction must not impose per-tile overhead when residency is available.
+
+\paragraph{Split-reduction path.}
+Several devices or CPU workers compute disjoint $J_c$ ranges and reduce their partial accumulators. This increases accumulator traffic and changes floating reduction order unless deterministic reduction is selected.
+
+\subsection{Byte-accurate working-set accounting}
+
+A candidate tile is legal only after accounting for storage and compute dtypes, packing, and workspace. For one output-stationary pipeline with $q$ device weight buffers and $h$ host staging buffers,
+\begin{align}
+M_{\mathrm{device}}
+&=R_0+q\,\bytes(W_{I_b,J_c}^{\mathrm{compute}})
+ +q_X\bytes(X_{P_a,J_c}^{\mathrm{compute}})
+ +\bytes(A_{P_a,I_b}^{\mathrm{acc}}) \notag\\
+&\quad +\bytes(b_{I_b})+U_{\mathrm{kernel}}+Z_0,\label{eq:linear-device}\\
+M_{\mathrm{pinned}}
+&=R_1+h\,\bytes(W_{I_b,J_c}^{\mathrm{storage}})
+ +h_X\bytes(X_{P_a,J_c}^{\mathrm{storage}})+Z_1.\label{eq:linear-host}
+\end{align}
+The planner uses actual dtype sizes and codec expansion. A 4-bit weight tile may require scales, zero points, alignment padding, and a BF16/FP16 or register-level dequantization path. A kernel-selected workspace is included in $U_{\mathrm{kernel}}$. The host ring is bounded; pinning the full checkpoint is neither required nor generally desirable.
+
+\subsection{Bias, residual, and fused epilogues}
+
+Bias is applied exactly once per output coordinate. It may initialize the accumulator or be applied in the final epilogue. Residual addition, activation, scaling, and dropout may be fused only when doing so preserves graph semantics and the output tile is final. Applying a nonlinear activation to partial sums is incorrect:
+\[
+  \phi\!\left(\sum_c z_c\right)\ne \sum_c\phi(z_c).
+\]
+in general.
+The operator plan marks an accumulator as \code{PARTIAL} until all reduction tiles and required cross-worker reductions finish. Only a \code{FINAL} tile may pass through non-linear epilogues or be consumed by a downstream operator that requires the complete coordinate value.
+
+\subsection{Storage layouts}
+
+A checkpoint stored in ordinary row-major order supports contiguous output-row slices but can make narrow reduction-axis tiles fragmented. A converter should generate one or more tile-major packed layouts selected from an architecture-independent layout family:
+
+\begin{itemize}
+  \item row panels $[I_b,0:n)$ for large contiguous layer offload;
+  \item two-dimensional panels $[I_b,J_c]$ aligned to filesystem and DMA boundaries;
+  \item backend packs for tensor-core or vector kernels, versioned by kernel ABI;
+  \item quantized panels containing data and adjacent scale/zero-point metadata;
+  \item optional transposed replicas when backward or alternative loop orders justify storage cost.
+\end{itemize}
+
+The canonical logical tensor remains layout-independent. Repacking is a conversion/cache operation with hashes linking the packed artifact to the source checkpoint. A portable package must retain or regenerate a generic layout rather than depend solely on a device-specific pack.
+
+\subsection{Asynchronous double or triple buffering}
+
+For buffer depth $q\ge2$, stage $r+1$ can read/decode/copy while stage $r$ computes. Let $H_i$ be pinned host buffers, $D_i$ device weight buffers, and $E_i^{\mathrm{copy}},E_i^{\mathrm{compute}}$ events. A buffer cycle is:
+
+\begin{enumerate}
+  \item wait until the prior compute event for slot $i$ has released $D_i$;
+  \item fill $H_i$ by asynchronous storage read, or direct-read into $D_i$ when supported;
+  \item launch host-to-device copy on a transfer stream and record $E_i^{\mathrm{copy}}$;
+  \item make the compute stream wait on $E_i^{\mathrm{copy}}$;
+  \item launch the tile kernel and record $E_i^{\mathrm{compute}}$;
+  \item reuse $H_i$ only after the copy no longer references it; reuse $D_i$ only after compute completion.
+\end{enumerate}
+
+Page-locked host memory is required for genuine asynchronous CPU--GPU copies on CUDA, and overlap depends on hardware copy engines and stream configuration \cite{cuda_async}. The backend capability report determines whether $q=2$, $q=3$, or a serial path is useful.
+
+\subsection{Quantized and compressed weights}
+
+The logical linear operator is independent of storage encoding. A codec plugin declares:
+\[
+  (d_s,\text{metadata},\text{tile})
+  \xrightarrow{\text{decode}}
+  W_{I_b,J_c}^{\mathrm{compute}}
+\]
+and bounds its source bytes, decoded bytes, workspace, alignment, and numeric error. Three implementations are permitted:
+
+\begin{enumerate}
+  \item decode into a leased device tile, then call a standard GEMM;
+  \item fuse decode into the matrix kernel, avoiding full decoded materialization;
+  \item decode on CPU into a bounded pinned buffer when the device lacks support.
+\end{enumerate}
+
+Lossless compression preserves exact logical values but may have data-dependent expansion time. Lossy quantization belongs to approximate mode and records calibration, scale conventions, group size, and reference tolerances. The runtime must not reinterpret arbitrary checkpoint bytes based on filename alone.
+
+\subsection{Batched, grouped, and tensor forms}
+
+Linear layers in attention and MoE often have extra logical axes. The operator registry normalizes these to a contraction
+\[
+  Y_{\alpha,\beta}
+   = \sum_{\gamma} X_{\alpha,\gamma}W_{\beta,\gamma}.
+\]
+After view and batch-index mapping, the registry selects a GEMM, batched GEMM, grouped GEMM, or scalar kernel. A tile descriptor carries logical origins and physical strides; it must not assume contiguous \code{view} is valid. Non-contiguous input views are either materialized into a bounded tile or consumed by a strided kernel.
+
+\subsection{Reference algorithm}
+
+Algorithm~\ref{alg:linear-sweep} gives the semantic baseline. The production scheduler expands the asynchronous calls into task nodes and may reorder independent tiles, but it may not violate accumulator dependencies.
+
+\begin{algorithm}[t]
+\caption{Bounded output-stationary linear sweep}
+\label{alg:linear-sweep}
+\begin{algorithmic}[1]
+\Require Virtual tensors $X,W,b,Y$; partitions $\{P_a\},\{I_b\},\{J_c\}$; plan $P$
+\ForAll{$P_a$ in request order}
+  \ForAll{$I_b$ in planned output order}
+    \State $A\gets \Call{LeaseAccumulator}{|P_a|,|I_b|,P.\mathrm{acc\_dtype}}$
+    \State $A\gets \Call{BroadcastBiasTile}{b,I_b,A}$
+    \ForAll{$J_c$ in declared reduction order}
+      \State $X_t\gets \Call{Materialize}{X,(P_a,J_c),P.X\_placement}$
+      \State $W_t\gets \Call{Materialize}{W,(I_b,J_c),P.W\_placement}$
+      \State $A\gets \Call{MatmulAccumulate}{X_t,W_t,A,P.kernel}$
+      \State \Call{ReleaseAfterEvent}{$X_t,W_t$}
+    \EndFor
+    \State \Call{CommitVirtualTile}{$Y,(P_a,I_b),A$}
+    \State \Call{ReleaseAfterEvent}{$A$}
+  \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Planner invariants for linear operators}
+
+Every generated linear plan must satisfy:
+
+\begin{enumerate}
+  \item partitions cover each logical domain exactly once and contain no overlap unless an explicit reduction accounts for it;
+  \item bias and non-linear epilogues occur once and only after the complete reduction;
+  \item all physical byte ranges are bounds-checked and aligned or copied through an alignment buffer;
+  \item accumulator type and reduction order match the selected numerical mode;
+  \item resource equations, including worst-case codec and kernel workspaces, fit admitted arenas;
+  \item every asynchronous source and destination buffer remains leased until its completion event;
+  \item an empty dimension, zero-size tile, scalar shape, and tail tile have defined behavior;
+  \item output commit is atomic at tile granularity with respect to downstream consumers.
+\end{enumerate}

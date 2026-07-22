@@ -1,0 +1,58 @@
+\section{Multi-Device and Distributed Composition}
+\label{sec:multidevice}
+
+The local invariant does not require multiple accelerators, but additional devices should enlarge tiles and reduce elapsed time without changing graph semantics. The same plan model represents intra-node and optional inter-node communication.
+
+\subsection{Topology model}
+
+The backend reports a directed topology graph with device memories, host NUMA nodes, peer links, PCIe switches, network interfaces, and storage affinities. Each edge has calibrated bandwidth, latency, concurrency, direct-access capability, and failure domain. A placement that causes every tile to cross a slow NUMA or PCIe path may be worse than using one device.
+
+CPU cores and memory are also topology resources. Pinned staging should be allocated on the NUMA node nearest the target device, and storage queues should preserve affinity where the platform exposes it.
+
+\subsection{Linear parallelization choices}
+
+For $Y=XW^{\mathsf T}$:
+
+\paragraph{Output partitioning.}
+Partition $I_b$ across devices. Each device reads its weight rows and produces disjoint output coordinates, requiring no numeric reduction. Inputs may be replicated or streamed to each device. This is the preferred exact composition when output slices are independent.
+
+\paragraph{Reduction partitioning.}
+Partition $J_c$ across devices. Each produces a partial $Y$ tile, followed by a reduction. This can balance a very wide row but incurs communication and floating-order considerations.
+
+\paragraph{Token partitioning.}
+Partition $P_a$ across devices or requests. Each device executes independent token rows but may duplicate weight reads. It is effective when weights are locally cached or storage paths are independent.
+
+\paragraph{Layer pipeline.}
+Assign consecutive layers to devices and stream activation tiles between them. This reduces weight movement but introduces pipeline bubbles and requires each assigned layer's minimum tile plan to fit its device.
+
+The planner may combine these dimensions and uses established tensor/pipeline parallel ideas from Megatron-class systems \cite{shoeybi2019megatron,narayanan2021efficient}.
+
+\subsection{Distributed virtual tensors}
+
+A physical region map may list replicas or shards on several local devices and optional nodes. Read selection considers version, locality, load, and integrity. Mutable tiles use an ownership or reduction protocol. A node failure is outside the strict single-machine invariant but can be handled by durable replicas or recomputation.
+
+Remote transfer is an explicit task with leased network buffers and timeout/retry policy. The runtime does not expose a remote pointer as if it were local device memory. A distributed plan records topology assumptions and is invalidated when membership changes unless it has an elasticity rule.
+
+\subsection{Collective memory discipline}
+
+Communication libraries often allocate hidden buffers and communicators. Guaranteed mode initializes communicators during preflight, measures or configures fixed internal reserves, and uses caller-provided collective buffers where possible. Collective algorithms are locked for the plan envelope. A library that performs unbounded lazy allocation during requests is confined to best-effort mode or isolated behind a reserved pool.
+
+\subsection{Heterogeneous devices}
+
+Different devices may use different dtypes, kernel packs, and tile shapes. The canonical logical dtype and numeric mode determine legal conversions. Output partitioning can avoid cross-device reduction and tolerate heterogeneous throughput; the scheduler assigns tile counts proportional to calibrated rates. Reduction partitioning requires a common accumulation/merge representation.
+
+A weak integrated GPU, discrete GPU, and CPU can all contribute, but using a slow device is optional. The planner includes transfer costs and may leave it idle. Hardware agnosticism is not mandatory load balancing.
+
+\subsection{Graceful scaling}
+
+A single-device plan is always retained when preconditions hold. Adding devices permits:
+
+\begin{itemize}
+  \item larger resident caches and tile dimensions;
+  \item more weight/activation/KV pages concurrently resident;
+  \item parallel output or token partitions;
+  \item higher pipeline depth and IO concurrency;
+  \item layer residency and reduced storage traffic.
+\end{itemize}
+
+Removing a device requires a safe-point replan unless the plan contains redundant tasks and dynamic ownership. The logical session state remains portable because no checkpoint or KV address is defined solely by a transient device pointer.

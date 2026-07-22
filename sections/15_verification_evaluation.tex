@@ -1,0 +1,186 @@
+\section{Verification and Evaluation Protocol}
+\label{sec:verification}
+
+The purpose of evaluation is not merely to report tokens per second. It must test the governing invariant, semantic correctness, memory accounting, progress, resilience, portability, and the predicted time--memory trade. This section is a protocol for the implementation; no unmeasured result is asserted.
+
+\subsection{Questions}
+
+The artifact should answer:
+
+\begin{enumerate}
+  \item Does an accepted plan complete when the model or an individual tensor exceeds accelerator memory?
+  \item Does it complete when the checkpoint exceeds host DRAM and is streamed from persistent storage?
+  \item Is managed peak use bounded by the preflight plan across success, cancellation, and faults?
+  \item Do outputs satisfy exact/deterministic/tolerance contracts across tile sizes and placements?
+  \item Does asynchronous pipelining approach the expected bottleneck stage when overlap is supported?
+  \item How do latency and throughput scale as fast-memory budget decreases?
+  \item Which operator, IO path, cache, or scheduler effect limits performance?
+  \item Does the compiler cover real model graphs without hidden whole-tensor materialization?
+  \item Are failures classified, cleaned up, and recoverable?
+\end{enumerate}
+
+\subsection{Unit and property tests}
+
+Each pure component has deterministic unit tests. Property-based generators cover shapes, dtypes, strides, partitions, budgets, and fault sequences. Required properties include:
+
+\begin{itemize}
+  \item virtual tile round-trip preserves logical values and aliases;
+  \item partition plans cover domains exactly once and tails correctly;
+  \item every accepted task vector fits and every lease is eventually released;
+  \item buffer epochs prevent reuse before completion;
+  \item online summaries equal batch references in exact arithmetic;
+  \item plan serialization is canonical and round-trips;
+  \item manifest parsers reject overflow, overlap, truncation, duplicate IDs, and invalid codecs;
+  \item cancellation at every state reaches a terminal request with baseline resources;
+  \item transaction recovery selects the last fully published version.
+\end{itemize}
+
+A reference scheduler model executes tasks synchronously and is compared to the concurrent scheduler's terminal state for generated DAGs. Small-state model checking explores resource vectors, event orders, retries, and cancellation.
+
+\subsection{Operator differential tests}
+
+For every operator/backend/mode tuple:
+
+\begin{enumerate}
+  \item generate random and adversarial logical inputs;
+  \item execute a trusted whole-tensor or high-precision reference where it fits;
+  \item execute many \AMS tile grids, loop orders, storage placements, and buffer depths;
+  \item compare values, aliases, side effects, RNG, and errors under the declared contract;
+  \item record worst observed error and resource high-water marks.
+\end{enumerate}
+
+Linear tests include prime and odd dimensions, one-scalar tiles, non-contiguous views, tied storage, zero dimensions, large reduction counts, quantized tails, and spillable output. Attention tests include causal/prefix/window masks, all-masked rows, grouped-query heads, long KV paging, shared prefixes, and storage-resident pages. MoE tests vary route imbalance and duplicate expert choices. SSM tests compare recurrent and scan plans.
+
+Gradient tests use finite differences where practical and framework double-precision gradient references for double precision. They verify accumulation across microbatches, rematerialization RNG, optimizer updates, and crash recovery.
+
+\subsection{Memory invariant tests}
+
+The test harness runs the engine with deliberately small broker arenas independent of physical device capacity. For each plan it records:
+
+\[
+  \Delta_k=\peak(M_k^{\mathrm{measured}})-B_k^{\mathrm{plan}}.
+\]
+The managed allocator requires $\Delta_k\le0$. Device-wide telemetry may include fixed driver or external noise; its acceptance uses a separately calibrated reserve and tolerance. Any unexplained growth is a failure, not automatically added to the margin.
+
+Tests include:
+
+\begin{itemize}
+  \item a weight matrix whose single conventional allocation exceeds the arena;
+  \item input and output tensors independently larger than the arena;
+  \item KV cache larger than device and host cache tiers;
+  \item simultaneous requests at maximum admitted concurrency;
+  \item repeated plan create/destroy cycles and long-running decode;
+  \item cancellation during read, copy, kernel, reduction, and commit;
+  \item external cooperative pressure causing cache shrink and safe replan;
+  \item plugins attempting to exceed workspace, which must be rejected or isolated.
+\end{itemize}
+
+\subsection{Fault-injection matrix}
+
+The storage and backend test doubles inject:
+
+\begin{itemize}
+  \item short reads, delayed completions, reordered completions, and queue saturation;
+  \item checksum mismatch, stale replica, truncated file, and manifest corruption;
+  \item disk full, permission change, read-only transition, and device removal;
+  \item transfer failure, kernel error, event error, and communicator failure;
+  \item process crash at every journal publication step;
+  \item duplicate callback and lost callback simulation in debug schedulers;
+  \item telemetry exporter failure and slow output consumer.
+\end{itemize}
+
+Expected outcomes specify retry limits, replica use, terminal code, durable version, and resource cleanup. Fault tests run under thread, address, undefined-behavior, and leak sanitizers where applicable.
+
+\subsection{Hardware and software matrix}
+
+A credible portability evaluation includes at least:
+
+\begin{itemize}
+  \item CPU-only machine with model larger than configured DRAM cache;
+  \item low-memory discrete GPU, such as 8--12~GiB class;
+  \item 16--24~GiB consumer GPU;
+  \item high-memory data-center GPU as an all-resident upper baseline;
+  \item two local GPUs with asymmetric or peer topology;
+  \item one unified-memory platform where supported;
+  \item CUDA and at least one non-CUDA accelerator backend once claimed stable;
+  \item SATA SSD and NVMe storage, with filesystem and direct-IO variants.
+\end{itemize}
+
+The report lists CPU, memory channels, NUMA, GPU, PCIe generation/width, storage model/firmware/filesystem, OS/kernel, drivers, clocks/power policy, thermal state, framework/compiler commits, and background-load controls.
+
+\subsection{Models and workloads}
+
+Use both synthetic and real models.
+
+\paragraph{Synthetic contractions.}
+Dense matrices and tensor contractions at $0.5\times$, $1\times$, $2\times$, $8\times$, and $32\times$ the fast-memory budget isolate tile correctness and bandwidth. Shapes include one row larger than the arena and output larger than the arena.
+
+\paragraph{Dense decoder models.}
+Use several public transformer sizes such that at least one fits device memory, one exceeds device memory but fits DRAM, and one exceeds configured DRAM cache and streams from storage. Include multi-query/grouped-query attention and large-vocabulary cases.
+
+\paragraph{MoE model.}
+Evaluate balanced and adversarial routing, hot-expert caching, and worst-case all-expert traffic.
+
+\paragraph{State-space or recurrent model.}
+Compare recurrent decode and chunked prefill plans.
+
+\paragraph{Training microbenchmarks.}
+After training support is stable, test LoRA/adapters and full linear backward, then a small end-to-end model with optimizer streaming and recovery.
+
+Workloads cover prefill lengths, decode lengths, batch/concurrency, cold and warm cache, deterministic and fast modes, and optional quantization.
+
+\subsection{Baselines}
+
+Relevant baselines are selected according to the question:
+
+\begin{itemize}
+  \item ordinary framework execution when the model fits;
+  \item naive whole-layer CPU/disk offload;
+  \item Hugging Face Accelerate big-model inference \cite{accelerate_big_model};
+  \item DeepSpeed ZeRO-Inference \cite{deepspeed_zero_inference};
+  \item FlexGen for throughput-oriented heterogeneous inference \cite{sheng2023flexgen};
+  \item llama.cpp CPU/GPU offload and quantized local inference \cite{llamacpp};
+  \item vLLM for all-resident or supported KV-paged serving \cite{kwon2023pagedattention};
+  \item ZeRO/FSDP/ZeRO-Infinity for training questions \cite{rajbhandari2020zero,zhao2023fsdp,rajbhandari2021zeroinfinity}.
+\end{itemize}
+
+Baselines must use comparable precision, quantization, batch, context, output length, and correctness. If a baseline cannot run because one layer exceeds its unit of offload, report that fact separately from throughput.
+
+\subsection{Metrics}
+
+Primary metrics are:
+
+\begin{itemize}
+  \item completion and error classification;
+  \item managed and process/device peak bytes by tier;
+  \item checkpoint, link, spill, and KV bytes per prompt/token;
+  \item time to first token, inter-token latency distribution, and total latency;
+  \item prompt and generation throughput;
+  \item storage/link bandwidth utilization and read-size distribution;
+  \item compute utilization, kernel launch count, and achieved operation rate;
+  \item overlap efficiency and idle/stall decomposition;
+  \item cache hit and prefetch precision;
+  \item numerical error or exact-match rate;
+  \item energy and storage write volume where measurable;
+  \item recovery time and leaked-resource count after faults.
+\end{itemize}
+
+Plot performance against the configured fast-memory budget to reveal the trade curve. Report cold and warm conditions separately. Include confidence intervals over repeated runs and explain cache flushing and thermal controls.
+
+\subsection{Acceptance thresholds}
+
+Initial release gates should be objective but not fabricate throughput targets:
+
+\begin{enumerate}
+  \item \textbf{Correctness}: all exact/property tests pass; floating errors stay within mode-specific published tolerances.
+  \item \textbf{Capacity}: every accepted invariant test completes with managed peak at or below plan bounds.
+  \item \textbf{Fallback}: candidate generation reaches a valid minimum plan for every supported operator under its documented minimum budget.
+  \item \textbf{Cleanup}: no lease, file descriptor, thread, stream, or page remains owned after terminal cleanup.
+  \item \textbf{Recovery}: fault cases recover the last committed version and emit the specified code.
+  \item \textbf{Performance sanity}: overlappable pipelines show no unexplained serialization; calibrated estimates remain within a published error band on stable microbenchmarks.
+  \item \textbf{Regression}: protected benchmark medians and tails do not regress beyond repository thresholds without an approved baseline update.
+\end{enumerate}
+
+\subsection{Reproducibility bundle}
+
+Each benchmark run exports configuration, plan, graph/checkpoint hashes, hardware/software inventory, calibration database, raw metrics, task trace, logs, command line, random seeds, and analysis scripts. Checkpoint licenses may prevent redistribution, but content hashes and acquisition instructions remain. The paper's final empirical version should archive this bundle in a durable repository.

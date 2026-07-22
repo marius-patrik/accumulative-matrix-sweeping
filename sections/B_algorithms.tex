@@ -1,0 +1,223 @@
+\section{Reference Algorithms}
+\label{app:algorithms}
+
+These algorithms define semantics and control flow. An implementation may optimize them while preserving dependencies, resources, and numerical contracts.
+
+\subsection{Preflight}
+
+Algorithm~\ref{alg:preflight} validates the package, request envelope, backing capacity, backend reserve, operator coverage, and resource proof before any model execution begins.
+
+\begin{algorithm}[H]
+\caption{Model and request preflight}
+\label{alg:preflight}
+\begin{algorithmic}[1]
+\Require Model package $M$, request envelope $R$, hierarchy $H$, policy $\Pi$
+\State $V\gets\Call{ValidateManifestAndGraph}{M,\Pi.security}$
+\If{$V$ fails} \State \Return structured rejection \EndIf
+\State $S\gets\Call{BoundSlowTierState}{M,R,\Pi}$
+\If{no storage placement can hold $S$} \State \Return \code{PREFLIGHT\_NO\_BACKING} \EndIf
+\State $C\gets\Call{DiscoverAndCalibrateCapabilities}{H,\Pi}$
+\ForAll{backend sets $B$ in preferred fallback order}
+  \State $R_B\gets\Call{ReserveRuntimeBaseAndArenas}{B,C,\Pi}$
+  \If{$R_B$ fails} \State \textbf{continue} \EndIf
+  \State $G\gets\Call{CaptureOrLoadCanonicalIR}{M,R}$
+  \State $Q\gets\Call{GenerateOperatorCandidates}{G,M,C,R_B,\Pi}$
+  \If{some reachable op has no candidate} \State \Call{Release}{$R_B$}; \textbf{continue} \EndIf
+  \State $P\gets\Call{SelectGraphPlan}{G,Q,S,R_B,\Pi}$
+  \If{$P$ exists and \Call{ValidateResourceProof}{$P,R_B$}}
+    \State \Return accepted plan $P$ and reservation token $R_B$
+  \EndIf
+  \State \Call{Release}{$R_B$}
+\EndFor
+\State \Return \Call{MostSpecificFailure}{\code{UNSUPPORTED\_OP}, \code{NO\_WORKING\_SET}}
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Candidate search for a linear operator}
+
+Algorithm~\ref{alg:linear-candidates} enumerates byte-exact tile, loop-order, buffering, layout, and accumulator candidates, retaining only legal Pareto-efficient plans.
+
+\begin{algorithm}[H]
+\caption{Generate legal linear tile candidates}
+\label{alg:linear-candidates}
+\begin{algorithmic}[1]
+\Require Shapes $(p,m,n)$, layouts, codec, backend capabilities $C$, budget $B$, policy $\Pi$
+\State $P_s\gets\Call{CandidateSizes}{p,C.token\_mult,C.align}$
+\State $I_s\gets\Call{CandidateSizes}{m,C.output\_mult,C.align}$
+\State $J_s\gets\Call{CandidateSizes}{n,C.reduction\_mult,C.align}$
+\State $\mathcal Q\gets\emptyset$
+\ForAll{$(p_t,i_t,j_t)$ in descending product $P_s\times I_s\times J_s$}
+  \ForAll{loop order $o$ in supported loop orders}
+    \ForAll{buffer depth $q$ in supported depths}
+      \ForAll{kernel/layout/accumulator tuple $k$ compatible with $\Pi$}
+        \State $r\gets\Call{ExactResourceVector}{p_t,i_t,j_t,o,q,k}$
+        \If{$r\preceq B$}
+          \State $c\gets\Call{EstimatePhysicalCost}{p,m,n,p_t,i_t,j_t,o,q,k}$
+          \State insert candidate $(r,c,\text{parameters})$ into Pareto set $\mathcal Q$
+        \EndIf
+      \EndFor
+    \EndFor
+  \EndFor
+\EndFor
+\If{$\mathcal Q=\emptyset$ and scalar primitive fits}
+  \State insert scalar external-memory candidate
+\EndIf
+\State \Return $\mathcal Q$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Asynchronous matrix sweep task expansion}
+
+Algorithm~\ref{alg:async-linear} expands one admitted linear plan into dependency-safe asynchronous tasks whose buffers remain leased until their terminal events complete.
+
+\begin{algorithm}[H]
+\caption{Expand one output tile into asynchronous tasks}
+\label{alg:async-linear}
+\begin{algorithmic}[1]
+\Require Output coordinates $(P_a,I_b)$, reduction blocks $J_0,\ldots,J_{q-1}$, plan $P$
+\State create task $u_0=\Call{InitAccumulator}{P_a,I_b}$
+\State $u_{prev}\gets u_0$
+\For{$c=0$ to $q-1$}
+  \State create $r_c=\Call{ReadWeightAndActivation}{P_a,I_b,J_c,slot(c)}$
+  \State create $v_c=\Call{VerifyDecodeCopy}{r_c,slot(c)}$
+  \State create $g_c=\Call{MatmulAccumulate}{v_c,u_{prev}}$
+  \State add dependencies $r_c\to v_c\to g_c$ and $u_{prev}\to g_c$
+  \State $u_{prev}\gets g_c$
+\EndFor
+\State create epilogue $e=\Call{FinalizeOutput}{u_{prev}}$
+\State create commit $w=\Call{CommitTile}{e}$
+\State \Return task subgraph with resource formulas bound to tile coordinates
+\end{algorithmic}
+\end{algorithm}
+
+Reads for $c+1$ may be admitted before compute $g_c$ if slot and arena credits permit. The accumulator dependency remains ordered in reference mode; deterministic trees create independent partial chains followed by fixed merge tasks.
+
+\subsection{Online attention}
+
+Algorithm~\ref{alg:attention} gives the blockwise online-softmax recurrence used by exact streamed attention over a virtual KV sequence.
+
+\begin{algorithm}[H]
+\caption{External-memory exact attention for one query tile}
+\label{alg:attention}
+\begin{algorithmic}[1]
+\Require Query tile $Q$, logical KV block sequence $\mathcal B$, mask rule $M$, plan $P$
+\State $m\gets-\infty$ by query row; $\ell\gets0$; $O\gets0$
+\ForAll{KV block descriptors $b$ in declared logical order}
+  \State $(K,V)\gets\Call{MaterializeKVBlock}{b,P}$
+  \State $S\gets\Call{ScoreTile}{Q,K,P}$
+  \State $S\gets\Call{ApplyMask}{S,M,b}$
+  \State $m'\gets\max(m,\operatorname{rowmax}(S))$
+  \State $A\gets\exp(m-m')$
+  \State $P_b\gets\exp(S-m'\mathbf 1^{\mathsf T})$
+  \State $\ell\gets A\odot\ell+P_b\mathbf 1$
+  \State $O\gets\operatorname{diag}(A)O+P_bV$
+  \State $m\gets m'$
+  \State \Call{ReleaseAfterEvent}{$K,V,S,P_b$}
+\EndFor
+\State \Return $O/\ell$ under all-masked-row policy
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Credit scheduler}
+
+Algorithm~\ref{alg:scheduler} defines complete-vector atomic admission, fair dispatch, event-driven lease release, and explicit idle waiting.
+
+\begin{algorithm}[H]
+\caption{Resource-admitting scheduler loop}
+\label{alg:scheduler}
+\begin{algorithmic}[1]
+\While{engine not stopped}
+  \State drain completion queue
+  \ForAll{completion $c$}
+    \State validate task/epoch and transition task terminal
+    \State release leases whose terminal events completed
+    \State update dependent predecessor counts and enqueue newly ready tasks
+    \State propagate terminal errors/cancellation according to policy
+  \EndFor
+  \State $A\gets\emptyset$
+  \ForAll{ready tasks $u$ in priority, locality, and aging order}
+    \If{$\Call{TryLeaseAtomically}{u.resource\_vector}$ succeeds}
+      \State add $(u,leases)$ to $A$
+    \EndIf
+  \EndFor
+  \ForAll{$(u,leases)$ in $A$}
+    \State bind buffers, submit to IO/backend, record terminal events
+    \State transition $u$ to \textsc{Submitted}
+  \EndFor
+  \If{no submission or completion occurred}
+    \State wait on completion, credit-release, admission, or shutdown event
+  \EndIf
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{KV page append and copy-on-write}
+
+Algorithm~\ref{alg:kv-append} appends recurrent state without violating prefix sharing, page versioning, or publish-after-commit semantics.
+
+\begin{algorithm}[H]
+\caption{Append one token's KV state}
+\label{alg:kv-append}
+\begin{algorithmic}[1]
+\Require Request $r$, layer $\ell$, K/V row tiles, page capacity $c$
+\State $p\gets\Call{LastLogicalPage}{r,\ell}$
+\If{$p$ absent or full}
+  \State $p\gets\Call{AllocateVirtualPage}{r,\ell}$
+\ElsIf{$p.refcount>1$}
+  \State $p'\gets\Call{AllocateVirtualPage}{r,\ell}$
+  \State copy valid prefix of $p$ to $p'$ through bounded tiles
+  \State atomically replace request mapping $p\mapsto p'$
+  \State decrement $p.refcount$; $p\gets p'$
+\EndIf
+\State write K/V row into next slot of a new page version
+\State verify and commit data before publishing incremented logical length
+\State \Return committed page/version and position
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Streaming checkpoint conversion}
+
+Algorithm~\ref{alg:convert} converts a source checkpoint transactionally with bounded staging and no full-model materialization.
+
+\begin{algorithm}[H]
+\caption{Convert a checkpoint to AMS packed format without full materialization}
+\label{alg:convert}
+\begin{algorithmic}[1]
+\Require Validated source metadata $S$, target layout policy $L$, bounded converter budget $B$
+\State create temporary target package and root transaction ID
+\ForAll{unique source storage objects in deterministic order}
+  \ForAll{target chunks produced by layout $L$}
+    \State lease source, transform, and destination buffers within $B$
+    \State read required source ranges and verify source integrity when available
+    \State transform layout/codec using bounded workspace
+    \State write aligned target chunk, compute checksum, and record descriptor
+    \State release buffers after IO completion
+  \EndFor
+\EndFor
+\State write canonical manifest with aliases, chunks, graph hash, and provenance
+\State verify all target chunks and manifest consistency
+\State atomically publish package root; remove temporary state on success
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Tiled optimizer update}
+
+Algorithm~\ref{alg:adam} applies a crash-consistent optimizer step over versioned parameter, moment, and state tiles.
+
+\begin{algorithm}[H]
+\caption{Transactional streamed Adam-like update}
+\label{alg:adam}
+\begin{algorithmic}[1]
+\Require Step $s$, parameter/gradient/optimizer virtual tensors, global scale/clipping result
+\State begin transaction $T_s$ rooted at committed version $s-1$
+\ForAll{parameter tiles $\tau$ in deterministic manifest order}
+  \State materialize $(\theta_{s-1},g_s,m_{s-1},v_{s-1})_\tau$ within budget
+  \State apply unscale, clipping, moment, bias-correction, and parameter update
+  \State write $(\theta_s,m_s,v_s)_\tau$ to new versioned regions with checksums
+  \State append tile completion to $T_s$ journal
+\EndFor
+\State write complete step metadata: RNG, scaler, scheduler, data position, graph/model versions
+\State atomically publish root manifest for version $s$
+\State retire version $s-1$ according to retention policy
+\end{algorithmic}
+\end{algorithm}

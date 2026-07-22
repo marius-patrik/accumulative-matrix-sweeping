@@ -1,0 +1,1007 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ams.local/schemas/plan.schema.json",
+  "title": "AMS Immutable Execution Plan",
+  "description": "A content-addressed execution plan with reservations, operator choices, task templates, guards, estimates, and a resource-proof summary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "plan_version",
+    "plan_id",
+    "model_root",
+    "graph_hash",
+    "hardware_fingerprint",
+    "software_fingerprint",
+    "calibration_id",
+    "request_envelope",
+    "numeric_contract",
+    "reservations",
+    "backends",
+    "operators",
+    "buffers",
+    "task_templates",
+    "scheduler",
+    "storage_routes",
+    "guards",
+    "fallbacks",
+    "estimates",
+    "proof"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "ams.execution.plan"
+    },
+    "plan_version": {
+      "$ref": "#/$defs/versionPair"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/hash"
+    },
+    "model_root": {
+      "$ref": "#/$defs/hash"
+    },
+    "graph_hash": {
+      "$ref": "#/$defs/hash"
+    },
+    "hardware_fingerprint": {
+      "$ref": "#/$defs/hash"
+    },
+    "software_fingerprint": {
+      "$ref": "#/$defs/hash"
+    },
+    "calibration_id": {
+      "$ref": "#/$defs/hash"
+    },
+    "policy_hash": {
+      "$ref": "#/$defs/hash"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 128
+    },
+    "request_envelope": {
+      "$ref": "#/$defs/requestEnvelope"
+    },
+    "numeric_contract": {
+      "$ref": "#/$defs/numericContract"
+    },
+    "reservations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resource_id",
+          "kind",
+          "capacity",
+          "fixed_reserve",
+          "exclusive"
+        ],
+        "properties": {
+          "resource_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "kind": {
+            "enum": [
+              "device_memory",
+              "host_pinned",
+              "host_pageable",
+              "spill",
+              "io_slots",
+              "copy_slots",
+              "compute_slots",
+              "decode_workers",
+              "file_descriptors",
+              "journal_slots",
+              "network_inflight"
+            ]
+          },
+          "capacity": {
+            "$ref": "#/$defs/uint"
+          },
+          "fixed_reserve": {
+            "$ref": "#/$defs/uint"
+          },
+          "exclusive": {
+            "type": "boolean"
+          },
+          "owner": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "safety_margin": {
+            "$ref": "#/$defs/uint"
+          }
+        }
+      }
+    },
+    "backends": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "backend_id",
+          "kind",
+          "capability_hash",
+          "priority",
+          "runtime_reserve"
+        ],
+        "properties": {
+          "backend_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "kind": {
+            "enum": [
+              "cpu",
+              "cuda",
+              "rocm",
+              "metal",
+              "vulkan",
+              "remote",
+              "custom"
+            ]
+          },
+          "device_ids": {
+            "type": "array",
+            "maxItems": 1024,
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          "capability_hash": {
+            "$ref": "#/$defs/hash"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": -100000,
+            "maximum": 100000
+          },
+          "runtime_reserve": {
+            "$ref": "#/$defs/resourceVector"
+          }
+        }
+      }
+    },
+    "operators": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "node_id",
+          "op_name",
+          "op_schema_version",
+          "implementation_id",
+          "plugin_id",
+          "plugin_version",
+          "phase",
+          "resource_bound",
+          "numeric_contract",
+          "task_template_id"
+        ],
+        "properties": {
+          "node_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "op_name": {
+            "$ref": "#/$defs/identifier"
+          },
+          "op_schema_version": {
+            "$ref": "#/$defs/semver"
+          },
+          "implementation_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "plugin_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "plugin_version": {
+            "$ref": "#/$defs/semver"
+          },
+          "phase": {
+            "enum": [
+              "open",
+              "prefill",
+              "decode",
+              "forward",
+              "backward",
+              "optimizer",
+              "all"
+            ]
+          },
+          "backend_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "tile_parameters": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,127}$"
+            },
+            "additionalProperties": {
+              "type": [
+                "integer",
+                "number",
+                "string",
+                "boolean"
+              ]
+            },
+            "maxProperties": 1024
+          },
+          "loop_order": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "buffer_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024
+          },
+          "resource_bound": {
+            "$ref": "#/$defs/resourceVector"
+          },
+          "numeric_contract": {
+            "$ref": "#/$defs/numericContract"
+          },
+          "task_template_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "layout_bindings": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/identifier"
+            },
+            "maxProperties": 4096
+          },
+          "guards": {
+            "type": "array",
+            "maxItems": 4096,
+            "items": {
+              "$ref": "#/$defs/identifier"
+            }
+          },
+          "estimated_cost_ns": {
+            "$ref": "#/$defs/uint"
+          }
+        }
+      }
+    },
+    "buffers": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "buffer_id",
+          "arena_resource_id",
+          "size_bytes",
+          "alignment_bytes",
+          "count",
+          "lifetime_class"
+        ],
+        "properties": {
+          "buffer_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "arena_resource_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "size_bytes": {
+            "$ref": "#/$defs/uint"
+          },
+          "alignment_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1073741824
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000000
+          },
+          "lifetime_class": {
+            "enum": [
+              "runtime",
+              "session",
+              "operator",
+              "task",
+              "event",
+              "transaction"
+            ]
+          },
+          "tensor_class": {
+            "enum": [
+              "parameter",
+              "activation",
+              "accumulator",
+              "kv_state",
+              "output",
+              "gradient",
+              "optimizer",
+              "workspace",
+              "metadata"
+            ]
+          }
+        }
+      }
+    },
+    "task_templates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "template_id",
+          "tasks",
+          "edges"
+        ],
+        "properties": {
+          "template_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "tasks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "local_id",
+                "kind",
+                "idempotence",
+                "resource_bound",
+                "operation"
+              ],
+              "properties": {
+                "local_id": {
+                  "$ref": "#/$defs/identifier"
+                },
+                "kind": {
+                  "enum": [
+                    "read",
+                    "verify",
+                    "decode",
+                    "copy",
+                    "compute",
+                    "reduce",
+                    "commit",
+                    "evict",
+                    "control"
+                  ]
+                },
+                "idempotence": {
+                  "enum": [
+                    "idempotent",
+                    "transactional",
+                    "non_idempotent"
+                  ]
+                },
+                "resource_bound": {
+                  "$ref": "#/$defs/resourceVector"
+                },
+                "operation": {
+                  "$ref": "#/$defs/identifier"
+                },
+                "attributes": {
+                  "$ref": "#/$defs/extensions"
+                },
+                "terminal_event_kind": {
+                  "enum": [
+                    "host",
+                    "io",
+                    "device",
+                    "network",
+                    "transaction"
+                  ]
+                }
+              }
+            }
+          },
+          "edges": {
+            "type": "array",
+            "maxItems": 10000000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "from",
+                "to"
+              ],
+              "properties": {
+                "from": {
+                  "$ref": "#/$defs/identifier"
+                },
+                "to": {
+                  "$ref": "#/$defs/identifier"
+                },
+                "version_binding": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "starvation_bound_ns",
+        "prefetch_policy",
+        "max_ready_tasks"
+      ],
+      "properties": {
+        "policy": {
+          "enum": [
+            "priority_aging",
+            "fair_share",
+            "deadline",
+            "throughput"
+          ]
+        },
+        "starvation_bound_ns": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "prefetch_policy": {
+          "enum": [
+            "off",
+            "conservative",
+            "cost_aware"
+          ]
+        },
+        "max_ready_tasks": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "priority_classes": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        }
+      }
+    },
+    "storage_routes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "route_id",
+          "source_store",
+          "destination_resource",
+          "path",
+          "alignment_bytes",
+          "max_inflight"
+        ],
+        "properties": {
+          "route_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "source_store": {
+            "$ref": "#/$defs/identifier"
+          },
+          "destination_resource": {
+            "$ref": "#/$defs/identifier"
+          },
+          "path": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/$defs/identifier"
+            }
+          },
+          "alignment_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1073741824
+          },
+          "max_inflight": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1048576
+          },
+          "direct": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "guards": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "guard_id",
+          "kind",
+          "expression",
+          "failure_action"
+        ],
+        "properties": {
+          "guard_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "kind": {
+            "enum": [
+              "shape",
+              "capability",
+              "capacity",
+              "version",
+              "policy",
+              "storage",
+              "calibration"
+            ]
+          },
+          "expression": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "failure_action": {
+            "enum": [
+              "reject",
+              "replan",
+              "fallback"
+            ]
+          }
+        }
+      }
+    },
+    "fallbacks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "order",
+          "backend_id",
+          "plan_variant_id",
+          "preserves_numeric_mode"
+        ],
+        "properties": {
+          "order": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1023
+          },
+          "backend_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "plan_variant_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "preserves_numeric_mode": {
+            "type": "boolean"
+          },
+          "minimum_working_set": {
+            "$ref": "#/$defs/resourceVector"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        }
+      }
+    },
+    "cache_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "enum": [
+            "none",
+            "lru",
+            "clock",
+            "two_queue",
+            "cost_aware"
+          ]
+        },
+        "class_weights": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          },
+          "maxProperties": 64
+        },
+        "bypass_one_shot": {
+          "type": "boolean"
+        }
+      }
+    },
+    "estimates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physical_read_bytes",
+        "physical_write_bytes",
+        "copy_bytes",
+        "flops",
+        "latency_ns",
+        "confidence"
+      ],
+      "properties": {
+        "physical_read_bytes": {
+          "$ref": "#/$defs/uint"
+        },
+        "physical_write_bytes": {
+          "$ref": "#/$defs/uint"
+        },
+        "copy_bytes": {
+          "$ref": "#/$defs/uint"
+        },
+        "flops": {
+          "$ref": "#/$defs/uint"
+        },
+        "kernel_launches": {
+          "$ref": "#/$defs/uint"
+        },
+        "latency_ns": {
+          "$ref": "#/$defs/uint"
+        },
+        "time_to_first_token_ns": {
+          "$ref": "#/$defs/uint"
+        },
+        "inter_token_ns": {
+          "$ref": "#/$defs/uint"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "assumptions": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validator_version",
+        "resource_proof_hash",
+        "operator_coverage_complete",
+        "unsupported_nodes",
+        "max_live_resources",
+        "spill_bound_bytes",
+        "minimum_working_set",
+        "safe_fallback_present"
+      ],
+      "properties": {
+        "validator_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "resource_proof_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "operator_coverage_complete": {
+          "const": true
+        },
+        "unsupported_nodes": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "max_live_resources": {
+          "$ref": "#/$defs/resourceVector"
+        },
+        "spill_bound_bytes": {
+          "$ref": "#/$defs/uint"
+        },
+        "minimum_working_set": {
+          "$ref": "#/$defs/resourceVector"
+        },
+        "safe_fallback_present": {
+          "type": "boolean"
+        },
+        "liveness_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "independent_validation_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "enum": [
+            "ed25519",
+            "ecdsa-p256",
+            "rsa-pss-sha256",
+            "custom"
+          ]
+        },
+        "key_id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "signature": {
+          "type": "string",
+          "maxLength": 16384
+        }
+      },
+      "required": [
+        "algorithm",
+        "key_id",
+        "signature"
+      ]
+    },
+    "extensions": {
+      "$ref": "#/$defs/extensions"
+    }
+  },
+  "$defs": {
+    "uint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "positiveInt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^(sha256|sha512|blake3):[0-9a-f]+$",
+      "maxLength": 1024
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}$",
+      "maxLength": 512
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+      "maxLength": 128
+    },
+    "versionPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
+    "shape": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/uint"
+      }
+    },
+    "dtype": {
+      "type": "string",
+      "enum": [
+        "bool",
+        "uint8",
+        "int8",
+        "uint16",
+        "int16",
+        "uint32",
+        "int32",
+        "uint64",
+        "int64",
+        "float8_e4m3fn",
+        "float8_e5m2",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
+        "int2_grouped",
+        "int3_grouped",
+        "int4_grouped",
+        "int8_grouped",
+        "custom"
+      ]
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9.-]{1,127}$"
+      },
+      "additionalProperties": true,
+      "maxProperties": 256
+    },
+    "resourceVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memory",
+        "capacities"
+      ],
+      "properties": {
+        "memory": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "resource_id",
+              "bytes"
+            ],
+            "properties": {
+              "resource_id": {
+                "$ref": "#/$defs/identifier"
+              },
+              "bytes": {
+                "$ref": "#/$defs/uint"
+              }
+            }
+          }
+        },
+        "capacities": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "resource_id",
+              "units"
+            ],
+            "properties": {
+              "resource_id": {
+                "$ref": "#/$defs/identifier"
+              },
+              "units": {
+                "$ref": "#/$defs/uint"
+              }
+            }
+          }
+        }
+      }
+    },
+    "requestEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_prompt_tokens",
+        "max_new_tokens",
+        "max_batch",
+        "max_beams",
+        "max_speculative_tokens"
+      ],
+      "properties": {
+        "max_prompt_tokens": {
+          "$ref": "#/$defs/uint"
+        },
+        "max_new_tokens": {
+          "$ref": "#/$defs/uint"
+        },
+        "max_batch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_beams": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_speculative_tokens": {
+          "$ref": "#/$defs/uint"
+        },
+        "max_sequence_tokens": {
+          "$ref": "#/$defs/uint"
+        }
+      }
+    },
+    "numericContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "reduction_order",
+        "deterministic",
+        "approximate"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "reference",
+            "deterministic",
+            "stable",
+            "fast",
+            "approximate"
+          ]
+        },
+        "reduction_order": {
+          "enum": [
+            "source_order",
+            "fixed_tree",
+            "backend_defined"
+          ]
+        },
+        "deterministic": {
+          "type": "boolean"
+        },
+        "approximate": {
+          "type": "boolean"
+        },
+        "accumulator_dtype": {
+          "$ref": "#/$defs/dtype"
+        },
+        "atol": {
+          "type": "number",
+          "minimum": 0
+        },
+        "rtol": {
+          "type": "number",
+          "minimum": 0
+        },
+        "non_finite_policy": {
+          "enum": [
+            "propagate",
+            "fail",
+            "sanitize_declared"
+          ]
+        },
+        "details": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
+    }
+  }
+}

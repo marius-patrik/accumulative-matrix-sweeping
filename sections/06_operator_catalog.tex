@@ -1,0 +1,186 @@
+\section{Stream-Decomposable LLM Operator Catalog}
+\label{sec:operators}
+
+A universal model-level invariant cannot stop at linear layers. This section specifies reference stream plans for the operator families required by contemporary language models. The optimized implementation may fuse or replace them, but every supported graph must lower to semantics equivalent to these plans.
+
+\subsection{Embeddings and tied output projections}
+
+For token indices $t_1,\ldots,t_p$ and embedding table $E\in\mathbb F^{V\times d}$, gather only requested rows. The planner sorts or groups repeated indices for coalesced reads, then restores request order. A bounded tile can contain one row; therefore vocabulary size does not enter fast-memory capacity. Position embeddings, segment embeddings, and learned scaling are pointwise additions on tiles.
+
+Tied input/output embeddings share a \code{storage\_id}. The language-model head is a linear contraction against the same logical tensor, possibly through a transposed packed view. The converter must not materialize a duplicate merely because framework state dictionaries expose aliases differently.
+
+\subsection{Layer normalization and RMS normalization}
+
+For a vector $x\in\mathbb F^d$, layer normalization requires mean and variance. A stable two-pass plan is:
+\begin{align}
+  \mu &= \frac1d\sum_j x_j,\\
+  q &= \sum_j (x_j-\mu)^2,\\
+  y_j &= \gamma_j\frac{x_j-\mu}{\sqrt{q/d+\epsilon}}+\beta_j.
+\end{align}
+A one-pass Welford summary may reduce reads while retaining numerical stability. The summary state $(n,\mu,M_2)$ is constant-size and mergeable across tiles. RMS normalization maintains $q=\sum_j x_j^2$ and applies scale in a second pass. Inputs may be reread from storage, retained when they fit, or rematerialized from a preceding operator. The planner chooses based on IO cost.
+
+Residual addition, scalar multiplication, clipping, RoPE, masks, and elementwise activations are coordinate-wise and tile trivially. A fused residual-plus-normalization plan must preserve whether the residual is consumed elsewhere and whether the normalized output is computed from pre- or post-residual values.
+
+\subsection{Feed-forward and gated MLP blocks}
+
+A standard feed-forward block
+\[
+  Z=\phi(XW_1^{\mathsf T}+b_1),\qquad
+  Y=ZW_2^{\mathsf T}+b_2
+\]
+can spill $Z$ by token and hidden tiles. A more efficient plan fuses an intermediate tile: compute a final $Z_{P,H_c}$ tile, apply $\phi$, then immediately sweep it into partial output accumulators for $W_2[:,H_c]$. This avoids materializing the complete expanded hidden activation but may require several output accumulators or repeated $Z$ computation.
+
+For SwiGLU or another gated block,
+\[
+  Z=\operatorname{silu}(XW_g^{\mathsf T})\odot(XW_u^{\mathsf T}),
+  \qquad Y=ZW_d^{\mathsf T},
+\]
+the gate and up-projection tiles for the same intermediate coordinates must be final before multiplication. The resulting $Z$ tile can then be consumed by the down projection. The planner may co-pack corresponding rows of $W_g$ and $W_u$ to reduce storage seeks.
+
+Three schedules are required:
+
+\begin{enumerate}
+  \item \emph{materialize-intermediate}: simplest and best when host/storage bandwidth is high and accumulator memory is low;
+  \item \emph{fused-intermediate}: retain one $Z$ tile and update one or more output accumulators;
+  \item \emph{recompute-intermediate}: reproduce a $Z$ tile for each output block, trading compute and repeated first-layer weight reads for less accumulator storage.
+\end{enumerate}
+
+The cost model must include all three; there is no universally optimal choice.
+
+\subsection{Exact streamed attention}
+
+Let query block $Q\in\mathbb F^{q\times d_h}$ attend to key/value blocks $K_r,V_r$ with scores
+\[
+  S_r=QK_r^{\mathsf T}/\sqrt{d_h}+M_r.
+\]
+For each query row, maintain $(m,\ell,O)$ as in Proposition~\ref{prop:online-softmax}. The block update is
+\begin{align}
+  m' &= \max\left(m,\operatorname{rowmax}(S_r)\right),\\
+  P_r &= \exp(S_r-m'\mathbf 1^{\mathsf T}),\\
+  \alpha &= \exp(m-m'),\\
+  \ell' &= \alpha\odot\ell+P_r\mathbf 1,\\
+  O' &= \operatorname{diag}(\alpha)O+P_rV_r.
+\end{align}
+After the final block, return $O/\ell$. Causal, sliding-window, prefix, and block-sparse masks are represented by $M_r$ or by skipping blocks known to be all masked. The score matrix is a bounded scratch tile and is never required in full.
+
+The implementation should reuse FlashAttention-class kernels when Q, K, and V subproblems fit; the external-memory layer wraps those kernels and pages K/V blocks from lower tiers. Exactness refers to the mathematical softmax; floating behavior follows Section~\ref{sec:numerics}.
+
+\subsection{Virtual KV cache}
+
+KV state is a virtual tensor indexed by request, layer, head/group, token position, and head dimension. Physical pages have fixed byte classes and independent tier placement. Required operations are:
+
+\begin{itemize}
+  \item append K/V rows transactionally after a token step;
+  \item gather an ordered logical range into attention blocks;
+  \item share immutable prefix pages across requests;
+  \item copy-on-write the final partially filled page;
+  \item evict cold pages to host or storage and prefetch predicted next blocks;
+  \item release all request-owned pages on completion or cancellation;
+  \item compact or remap without changing logical addresses.
+\end{itemize}
+
+PagedAttention shows the value of virtual paging for KV cache \cite{kwon2023pagedattention}. \AMS generalizes the page manager so KV pages, activation spill, and parameter tiles use one resource and integrity model while retaining operator-specific layouts.
+
+For a context too large even for host memory, attention streams KV pages from persistent storage. This preserves capacity but can impose $O(L)$ storage traffic per generated token for dense full-context attention. Sliding-window, recurrent compression, KV quantization, or rematerialization may reduce traffic in approximate or architecture-specific modes, but the baseline remains exact.
+
+\subsection{Vocabulary projection, softmax, \texorpdfstring{top-$k$}{top-k}, and sampling}
+
+A vocabulary projection may produce a logits vector larger than fast memory. The operator uses output tiles of the LM head and either spills logits or feeds them into an online consumer.
+
+For exact softmax probabilities, use two passes or a mergeable summary:
+\[
+  m=\max_i z_i,
+  \qquad \ell=\sum_i e^{z_i-m}.
+\]
+A second pass emits normalized probabilities by tile. For greedy decoding, only the global argmax pair $(z_i,i)$ is needed. For top-$k$, maintain a bounded heap of $k$ candidates while streaming. For top-$p$, exact selection generally requires enough distribution information to identify the cumulative cutoff; implementations may spill sorted runs and perform an external merge, or keep all logits in a slower tier. Approximate top-$p$ must be explicitly declared.
+
+Sampling must be reproducible under deterministic mode. The random draw is associated with a request token ordinal, not task completion order. Counter-based RNG lets tile scheduling change without changing the random variate. A stable sampling algorithm uses the same logical probability order regardless of physical tile order.
+
+\subsection{Mixture-of-experts}
+
+An MoE layer contains a router and expert networks. The reference plan is:
+
+\begin{enumerate}
+  \item compute router logits in tiles and select exact top-$k$ experts per token;
+  \item form a bounded dispatch table, spilling it if necessary;
+  \item group tokens by expert and capacity slot;
+  \item for each expert with assigned tokens, stream its MLP weights and execute the gated or standard MLP plan;
+  \item accumulate weighted expert outputs into token output tiles;
+  \item apply declared overflow, capacity, and normalization semantics.
+\end{enumerate}
+
+Sparse activation can reduce transferred weights because inactive experts need not be read, but the guarantee cannot assume a favorable routing distribution. A worst-case spill estimate includes all routed tokens and configured expert capacity. Popular sparse architectures such as Switch Transformers \cite{fedus2021switch} and Mixtral \cite{jiang2024mixtral} fit this contract when their routing semantics are represented in the operator attributes.
+
+\subsection{Convolutions}
+
+A convolution output tile depends on an input tile enlarged by the kernel halo. The planner tiles batch, output channel, spatial axes, and input-channel reduction. For each output tile, it initializes a bounded accumulator and sweeps input-channel and kernel tiles. Padding is generated logically and need not be stored. Direct, im2col, Winograd, or FFT kernels may be used when their complete workspace is declared. The scalar fallback enumerates output coordinates and kernel support.
+
+Depthwise and grouped convolutions expose independent groups and often have smaller minimum working sets. Transposed convolution requires scatter accumulation; the plan partitions output ownership or uses deterministic reduction buffers to avoid uncontrolled atomic workspaces.
+
+\subsection{State-space and recurrent operators}
+
+For a recurrence
+\[
+  h_t=F_t(h_{t-1},x_t),\qquad y_t=G_t(h_t,x_t),
+\]
+the carry $h_t$ is the bounded sequential summary when its state dimension fits. If the state vector itself does not fit, tile the state dimension when $F_t$ is separable or has a registered block algorithm; otherwise invoke the scalar interpreter. Selective state-space models such as Mamba use hardware-aware scan algorithms \cite{gu2023mamba}; \AMS registers both optimized chunked-scan plans and a recurrent fallback. The operator definition must specify whether cross-state coupling requires a reduction or matrix sweep at each time step.
+
+Parallel scan plans associate each sequence block with a summary transform and combine summaries in a tree. The planner may prefer recurrent execution for decode and parallel scan for prefill. Mutable recurrent state is versioned per request and checkpointed only according to session policy.
+
+\subsection{Collectives and reductions}
+
+Sum, max, min, logical reductions, norms, and histograms use mergeable summaries. A reduction plan declares associativity assumptions, identity, accumulator dtype, and deterministic merge order. Non-associative custom reductions must specify an order-preserving stream implementation or are unsupported in strict mode.
+
+Cross-device collectives are represented as tasks with declared communication buffers. Their library workspaces and communicator allocations are reserved during backend initialization; they may not appear as hidden allocations during a guaranteed request.
+
+\subsection{Views, slicing, concatenation, and indexing}
+
+Reshape and transpose are metadata-only when the requested tile remains representable as bounded physical spans. Otherwise, a bounded retiling copy materializes the target layout. Concatenation creates a logical segmented view; downstream tile reads are split at segment boundaries. Slice is a view. Gather and scatter use bounded index blocks, validate indices before physical access, and define duplicate-index accumulation order.
+
+\subsection{Operator coverage table}
+Table~\ref{tab:operators} records the required bounded-state decomposition and its principal hazards for each operator family.
+
+\begin{table}[p]
+\centering
+\caption{Reference stream state and principal tiled axes. ``Finalization'' identifies the point before a non-linear consumer may observe a tile.}
+\label{tab:operators}
+\small
+\begin{tabularx}{\textwidth}{@{}p{0.16\textwidth}p{0.22\textwidth}p{0.25\textwidth}X@{}}
+\toprule
+Operator & Principal tile axes & Bounded persistent summary & Finalization condition \\
+\midrule
+Linear / projection & tokens, output, reduction & output accumulator & all reduction blocks complete \\
+Embedding gather & requested rows, feature & deduplication/index map & requested row materialized \\
+LayerNorm & tokens, feature & Welford or $(\sum x,\sum x^2)$ & statistics complete; second pass applied \\
+RMSNorm & tokens, feature & sum of squares & norm complete; scale applied \\
+MLP / SwiGLU & token, intermediate, output & intermediate tile and/or output accumulators & both gated projections and down reduction complete \\
+Attention & query, KV block, head & online $(m,\ell,O)$ & all visible KV blocks complete \\
+KV append & request, layer, page & page table and partial page & page data and table update committed \\
+LM head & token, vocabulary, reduction & logits tile or online selection summary & hidden reduction complete \\
+Softmax & vocabulary block & $(m,\ell)$ & max/sum complete and output pass done \\
+Top-$k$ & vocabulary block & size-$k$ heap & all logits inspected \\
+Top-$p$ & vocabulary runs & external sorted runs / distribution state & cumulative cutoff proven \\
+MoE & token, expert, hidden & route table and token output accumulators & all selected expert contributions complete \\
+Convolution & batch, channel, spatial, kernel & output accumulator and halo tile & all input-channel/kernel blocks complete \\
+SSM / recurrence & time, state block & carry or block-transform summary & predecessor carry / scan prefix complete \\
+Elementwise & any coordinate axes & none beyond tile & local tile computed \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Custom operator contract}
+
+A custom operator is admissible only if its plugin supplies:
+
+\begin{enumerate}
+  \item a pure logical semantic function or test oracle;
+  \item shape, dtype, alias, mutation, and numerical-mode rules;
+  \item \code{minimum\_working\_set(capabilities, shape)};
+  \item one or more plan generators with complete resource declarations;
+  \item kernel implementations or a decomposition into registered primitives;
+  \item backward and saved-state rules if training is supported;
+  \item differential, property, bounds, cancellation, and corruption tests;
+  \item a versioned ABI and security classification.
+\end{enumerate}
+
+Opaque plugins that allocate through global device allocators, launch untracked asynchronous work, or retain pointers beyond leases are excluded from Level II guarantees.

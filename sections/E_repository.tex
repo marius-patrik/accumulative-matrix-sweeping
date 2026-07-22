@@ -1,0 +1,295 @@
+\section{Repository Blueprint, Milestones, and Release Gates}
+\label{app:repository}
+
+This appendix is a build specification for an implementation agent. The tree is normative in responsibility, not necessarily in exact filenames.
+
+\subsection{Repository tree}
+
+The following decomposition assigns one enforceable responsibility to each package and keeps semantic IR, planning, execution, storage, backends, and operator plugins independently testable.
+
+\begin{lstlisting}
+ams/
+  pyproject.toml
+  CMakeLists.txt
+  Cargo.toml                         # if Rust native core is selected
+  LICENSE
+  SECURITY.md
+  CONTRIBUTING.md
+  CODE_OF_CONDUCT.md
+  README.md
+  schemas/
+    manifest.schema.json
+    plan.schema.json
+    config.schema.json
+    trace.schema.json
+  src/ams/
+    __init__.py
+    api.py
+    config.py
+    errors.py
+    version.py
+    ir/
+      graph.py
+      values.py
+      effects.py
+      guards.py
+      serialization.py
+      passes/
+        canonicalize.py
+        aliases.py
+        shapes.py
+        liveness.py
+        fusion.py
+    compiler/
+      capture_pytorch.py
+      import_checkpoint.py
+      pattern_registry.py
+      lower.py
+      candidate.py
+      planner.py
+      cost_model.py
+      plan_cache.py
+    runtime/
+      engine.py
+      session.py
+      executor.py
+      scheduler.py
+      memory.py
+      leases.py
+      events.py
+      virtual_tensor.py
+      transactions.py
+      kv_manager.py
+      cancellation.py
+    storage/
+      base.py
+      manifest.py
+      ams_container.py
+      safetensors_store.py
+      mmap_store.py
+      file_store.py
+      direct_store.py
+      cache.py
+      checksum.py
+      journal.py
+    backends/
+      base.py
+      cpu.py
+      cuda.py
+      rocm.py
+      metal.py
+      registry.py
+    ops/
+      base.py
+      linear.py
+      embedding.py
+      normalization.py
+      attention.py
+      mlp.py
+      moe.py
+      convolution.py
+      ssm.py
+      reductions.py
+      indexing.py
+      sampling.py
+    codecs/
+      base.py
+      raw.py
+      fp_cast.py
+      int8.py
+      int4.py
+      lossless.py
+    training/
+      autograd.py
+      rematerialization.py
+      gradients.py
+      optimizers.py
+      checkpoint.py
+    integrations/
+      pytorch.py
+      transformers.py
+      generation.py
+    telemetry/
+      metrics.py
+      trace.py
+      logging.py
+      analysis.py
+    cli/
+      main.py
+      convert.py
+      inspect.py
+      preflight.py
+      run.py
+      benchmark.py
+      trace.py
+      recover.py
+      doctor.py
+  native/
+    include/ams/
+      abi.h
+      status.h
+      backend.h
+      storage.h
+      scheduler.h
+      memory.h
+    src/
+      core/
+      storage/
+      cpu/
+      cuda/
+      rocm/
+      metal/
+    tests/
+  tests/
+    unit/
+    property/
+    numerical/
+    integration/
+    models/
+    memory/
+    stress/
+    fault/
+    recovery/
+    security/
+    conformance/
+  benchmarks/
+    micro/
+    operators/
+    models/
+    analysis/
+    baselines/
+  fuzz/
+    manifest/
+    plan/
+    codecs/
+    abi/
+  docs/
+    architecture/
+    adr/
+    api/
+    operators/
+    backends/
+    formats/
+    security/
+    operations/
+    performance/
+    model_support/
+  examples/
+    cpu_out_of_core/
+    gpu_subtensor/
+    kv_storage_paging/
+    custom_operator/
+  tools/
+    generate_schemas.py
+    check_resource_formulas.py
+    build_repro_bundle.py
+  .github/workflows/
+    lint.yml
+    unit.yml
+    native-sanitizers.yml
+    cpu-integration.yml
+    cuda-integration.yml
+    rocm-integration.yml
+    fuzz.yml
+    docs.yml
+    package.yml
+    benchmark-regression.yml
+    release.yml
+\end{lstlisting}
+
+\subsection{Dependency rules}
+
+\begin{enumerate}
+  \item \code{ir} has no dependency on framework, storage, or backend implementations.
+  \item \code{compiler} depends on IR and abstract capability/storage metadata, not runtime instances.
+  \item \code{runtime} depends on abstract backends/stores and serialized plans, not PyTorch graph objects.
+  \item \code{ops} plugins depend on IR/operator contracts and backend kernel interfaces.
+  \item framework integrations depend on public API/compiler import surfaces and may be optional packages.
+  \item native core exposes no Python callback on device completion paths that can block while holding broker locks.
+  \item tests may depend on internal modules; examples and third-party plugins use only public APIs.
+\end{enumerate}
+
+A static architecture test checks imports and native library dependencies.
+
+\subsection{Implementation milestones}
+
+\paragraph{Milestone 0: specification executable skeleton.}
+Set up schemas, typed errors, virtual tensor descriptors, plan serialization, CPU-only CI, docs, and a synchronous reference executor. No accelerator claim. Acceptance: exact scalar linear, reduction, elementwise, and storage round-trip under a tiny bounded arena.
+
+\paragraph{Milestone 1: CPU external-memory core.}
+Implement range store, AMS container, mmap/file adapters, broker/leases, synchronous then asynchronous scheduler, CPU vector kernels, converter, and invariant tests where weights/input/output exceed the DRAM arena. Acceptance: a small transformer graph executes from storage with exact reference parity.
+
+\paragraph{Milestone 2: two-dimensional linear accelerator path.}
+Implement CUDA first or the selected primary accelerator: arena, events, pinned ring, async copies, device linear kernels, buffer pipeline, and memory accounting. Acceptance: a single weight row and full output can each exceed device arena; no whole-tensor allocation occurs; reference parity passes.
+
+\paragraph{Milestone 3: complete dense transformer inference.}
+Add embedding, norms, RoPE, gated MLP, exact attention, virtual KV, LM-head streaming, sampling, graph compiler, and Transformers adapter. Acceptance: supported decoder-only models execute with checkpoint larger than VRAM and, on a configured test, larger than DRAM cache.
+
+\paragraph{Milestone 4: performance planner.}
+Add calibration, candidate Pareto sets, graph fusion, prefill/decode plans, caching, continuous batching, direct IO optional path, trace analysis, and baselines. Acceptance: no unexplained pipeline serialization; plan estimates and measured stage times meet published tolerance.
+
+\paragraph{Milestone 5: model-family breadth.}
+Add MoE, convolution, SSM/recurrent, grouped/batched operators, dynamic-shape plan cache, second accelerator backend, and custom-op SDK. Acceptance: every advertised model has an operator coverage report and conformance artifact.
+
+\paragraph{Milestone 6: training.}
+Add joint forward/backward lowering, activation spill/rematerialization, gradient tiles, optimizer streaming, transactional checkpoints, and distributed composition. Acceptance: restart-exact small-model training and gradient/optimizer differential tests.
+
+\paragraph{Milestone 7: enterprise hardening.}
+Complete multi-tenant quotas, signatures, sandboxed converter, fuzzing, recovery tools, signed packages, SBOM, upgrade tests, long-duration stress, and incident runbooks.
+
+Milestones are cumulative. A later feature cannot weaken the memory invariant of earlier guaranteed paths.
+
+\subsection{Coding standards}
+
+Python uses strict type checking, formatting/linting, immutable descriptors, explicit exceptions, and no implicit global singleton backend. Native code uses RAII/ownership types, checked arithmetic, sanitizers, warning-as-error, and zero undefined behavior in parser/scheduler paths. Kernels document shape/alignment/workspace contracts and have scalar references.
+
+No TODO, placeholder pass, silent \code{except}, or ``temporary'' unbounded allocation is permitted in a release path. Experimental features are feature-gated and excluded from the support matrix.
+
+\subsection{Test and CI matrix}
+
+Every pull request runs:
+
+\begin{itemize}
+  \item formatting, lint, type, schema, documentation, license, and architecture checks;
+  \item CPU unit, property, numerical, memory, cancellation, and parser tests;
+  \item native ASan/UBSan/TSan where compatible, plus leak checks;
+  \item deterministic reproducibility and plan serialization tests;
+  \item a small end-to-end CPU out-of-core example.
+\end{itemize}
+
+Scheduled/self-hosted CI runs CUDA and ROCm conformance, direct IO, multi-device, long stress, fault/recovery, fuzz corpora, and benchmark regression. Release CI rebuilds from a signed tag, verifies reproducibility metadata, generates SBOM/provenance, signs artifacts, and executes smoke installs in clean environments.
+
+\subsection{Regression policy}
+
+Microbenchmarks have noise-qualified baselines by hardware pool. A regression gate uses robust statistics and requires investigation beyond a configured threshold. Baseline updates include a rationale, before/after traces, and confirmation that memory/correctness did not regress. Performance improvements that violate resource bounds are rejected.
+
+\subsection{Definition of done by component}
+
+A component is done only when it has:
+
+\begin{enumerate}
+  \item public or internal contract and invariants;
+  \item implementation with bounded resources;
+  \item unit, property, differential, cancellation, and fault tests as applicable;
+  \item metrics and structured diagnostics;
+  \item documentation and example;
+  \item compatibility/versioning declaration;
+  \item benchmark or cost-model calibration when on a critical path;
+  \item security review for parsers, native code, storage, or plugins.
+\end{enumerate}
+
+\subsection{First production slice}
+
+The smallest defensible production slice is not the original row-chunk module. It is:
+
+\begin{itemize}
+  \item CPU reference plus one accelerator backend;
+  \item AMS/safetensors range storage and streaming converter;
+  \item brokered arenas, events, scheduler, and traces;
+  \item true 2D linear, embeddings, RMSNorm/LayerNorm, RoPE, gated MLP, exact attention, virtual KV, LM head, greedy/top-$k$ sampling;
+  \item functional graph import for one well-defined decoder family;
+  \item model/row/output/KV oversize conformance tests;
+  \item preflight with exact bounds and CPU fallback.
+\end{itemize}
+
+Anything less can be a prototype, but should not claim the core invariant for arbitrary supported LLMs.

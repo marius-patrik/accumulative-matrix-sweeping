@@ -1,0 +1,151 @@
+\documentclass[11pt,reqno]{amsart}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{xspace}
+\usepackage{mathtools}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{algorithm}
+\usepackage{float}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,shapes.geometric,backgrounds,matrix,decorations.pathreplacing}
+\usepackage{graphicx}
+\usepackage{pdflscape}
+\usepackage{url}
+\usepackage[hidelinks,hypertexnames=false]{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+
+\setlist[itemize]{leftmargin=1.6em,itemsep=0.25em,topsep=0.35em}
+\setlist[enumerate]{leftmargin=1.8em,itemsep=0.25em,topsep=0.35em}
+\renewcommand{\arraystretch}{1.13}
+\setlength{\emergencystretch}{2em}
+
+\definecolor{amsblue}{RGB}{25,74,122}
+\definecolor{amsgray}{RGB}{245,246,248}
+\definecolor{amsdarkgray}{RGB}{55,62,70}
+\definecolor{amsgreen}{RGB}{38,112,80}
+\definecolor{amsorange}{RGB}{170,92,20}
+
+\hypersetup{
+  pdftitle={Accumulative Matrix Sweeping: A Bounded-Residency Virtual-Tensor Runtime for Arbitrarily Large Local Language Model Execution},
+  pdfauthor={Patrik},
+  pdfsubject={Out-of-core and memory-bounded large language model execution},
+  pdfkeywords={large language models, out-of-core computing, tensor virtualization, memory hierarchy, tiling, inference}
+}
+
+\lstdefinestyle{amscode}{
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{amsblue}\bfseries,
+  commentstyle=\color{amsgreen},
+  stringstyle=\color{amsorange},
+  backgroundcolor=\color{amsgray},
+  frame=single,
+  rulecolor=\color{black!20},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  tabsize=2,
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  aboveskip=0.8em,
+  belowskip=0.8em
+}
+\lstset{style=amscode}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\newtheorem{requirement}[theorem]{Requirement}
+\newtheorem{contract}[theorem]{Contract}
+\newtheorem{example}[theorem]{Example}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{warning}[theorem]{Warning}
+
+\newcommand{\AMS}{\textsc{AMS}\xspace}
+\newcommand{\VT}{\textsc{VirtualTensor}\xspace}
+\newcommand{\HBM}{\mathrm{HBM}}
+\newcommand{\DRAM}{\mathrm{DRAM}}
+\newcommand{\NVMe}{\mathrm{NVMe}}
+\newcommand{\bytes}{\operatorname{bytes}}
+\newcommand{\peak}{\operatorname{peak}}
+\newcommand{\fl}{\operatorname{fl}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\T}{\mathcal{T}}
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\Oset}{\Omega}
+\newcommand{\tier}[1]{\ensuremath{\mathsf{L}_{#1}}}
+\newcommand{\ceildiv}[2]{\left\lceil\frac{#1}{#2}\right\rceil}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title[Accumulative Matrix Sweeping]{Accumulative Matrix Sweeping:\\A Bounded-Residency Virtual-Tensor Runtime for Arbitrarily Large Local Language Model Execution}
+\author{Patrik}
+\date{21 July 2026}
+\subjclass[2020]{Primary 68M20, 68W40; Secondary 65Y05, 68M14, 68W15}
+\keywords{large language models, out-of-core computing, hierarchical memory, virtual tensors, tiled linear algebra, inference, memory-bounded execution}
+
+\begin{document}
+
+\begin{abstract}
+We introduce \emph{Accumulative Matrix Sweeping} (\AMS), a virtual-tensor execution model whose governing invariant is that a finite large language model may execute on a local machine even when its parameters, activations, key--value state, or individual tensors do not fit in accelerator memory or host memory, provided that the complete representation and spill state fit in some accessible slower storage tier and that the compute tier can hold the minimum legal working set of one primitive operation. The system trades residency for data movement and recomputation: logical tensors are represented as independently addressable regions; operators are lowered to stream-decomposable tile programs; a resource-admitting scheduler moves tiles through a hierarchy such as device memory, pinned host buffers, pageable memory, and persistent storage; and reductions are accumulated in bounded state. For a dense linear map, the defining sweep is
+\[
+  Y_{P,I} = b_I + \sum_J X_{P,J}W_{I,J}^{\mathsf T},
+\]
+where all three index sets may be tiled and completed output tiles may themselves be spilled. We prove an external-memory executability theorem for finite supported computation graphs, a parameter-size-independent fast-memory bound, exactness of tiled linear and online-attention recurrences over real arithmetic, a progress theorem for a credit-based task scheduler, and an unavoidable input/output lower bound for exact dense inference. These results delimit rather than conceal the trade-off: \AMS can make a computation fit, but cannot make storage bandwidth, latency, or arithmetic cost disappear.
+
+The paper specifies an enterprise-grade reference architecture: graph capture and decomposition; virtual tensor and checkpoint formats; portable backend contracts; a preallocated memory broker; asynchronous storage--host--device pipelines; prefill, decode, key--value paging, vocabulary streaming, mixture-of-experts, convolution, and state-space operator plans; deterministic and mixed-precision numerical modes; a training extension with tiled backward and optimizer-state streaming; multi-device composition; fault recovery, security, telemetry, testing, benchmarking, and continuous-integration requirements. No benchmark results are fabricated: the evaluation section is an executable protocol and acceptance suite for the implementation described herein.
+\end{abstract}
+
+\maketitle
+\tableofcontents
+
+\input{sections/01_introduction}
+\input{sections/02_scope_contract}
+\input{sections/03_model}
+\input{sections/04_theory}
+\input{sections/05_linear_sweeping}
+\input{sections/06_operator_catalog}
+\input{sections/07_planning}
+\input{sections/08_runtime}
+\input{sections/09_compiler}
+\input{sections/10_inference}
+\input{sections/11_training}
+\input{sections/12_multidevice}
+\input{sections/13_numerics}
+\input{sections/14_enterprise}
+\input{sections/15_verification_evaluation}
+\input{sections/16_related_work}
+\input{sections/17_limitations}
+\input{sections/18_conclusion}
+\appendix
+\input{sections/A_proofs}
+\input{sections/B_algorithms}
+\input{sections/C_interfaces}
+\input{sections/D_formats}
+\input{sections/E_repository}
+\input{sections/F_prototype_audit}
+
+\bibliographystyle{amsplain}
+\bibliography{references}
+
+\end{document}

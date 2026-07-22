@@ -1,0 +1,165 @@
+\section{Hierarchical-Memory and Virtual-Tensor Model}
+\label{sec:model}
+
+This section defines the objects manipulated by the compiler and runtime. The central abstraction is not a device tensor with occasional offload hooks, but a logical tensor whose physical materialization is a set of versioned regions distributed across a memory hierarchy.
+
+\subsection{Tiers, paths, and capacities}
+
+For each tier $\tier{k}$, let $C_k$ be its admitted byte capacity, $a_k$ its allocation granularity, and $q_k$ its alignment requirement. For every permitted directed transfer edge $e=(i,j)$, let $B_e(s)$ and $\lambda_e(s)$ denote calibrated effective bandwidth and latency for transfer size $s$, with concurrency limits $d_e$. A backend reports which transfers can overlap with compute and whether a direct path, such as storage-to-device DMA, exists. The planner never assumes that nominal bandwidth is achieved or that every pair of tiers is directly connected.
+
+A concrete hierarchy might be
+\[
+\begin{aligned}
+  \tier{0}&=\text{GPU HBM}, &
+  \tier{1}&=\text{pinned host ring},\\
+  \tier{2}&=\text{pageable DRAM cache}, &
+  \tier{3}&=\text{NVMe files}.
+\end{aligned}
+\]
+On a unified-memory system, logical tiers may share physical memory but retain different residency, pinning, and eviction policies. On CPU-only hardware, \tier{0} may be a bounded DRAM arena and \tier{1} a memory-mapped file.
+
+\subsection{Virtual tensor}
+
+\begin{definition}[Virtual tensor]
+A virtual tensor $T$ is the descriptor
+\[
+T=(\mathbf n,d_{\ell},d_s,L,V,\chi,\rho),
+\]
+where $\mathbf n$ is logical shape, $d_{\ell}$ is logical dtype, $d_s$ is storage dtype or codec, $L$ is a logical layout and view mapping, $V$ is a versioned physical-region map, $\chi$ is integrity metadata, and $\rho$ is placement and recomputation policy.
+\end{definition}
+
+The logical index domain is
+\[
+  D_T=\prod_{r=0}^{k-1}\{0,\ldots,n_r-1\}.
+\]
+A \emph{tile} $\tau=(\mathbf o,\mathbf e)$ denotes a rectangular subset with origin $\mathbf o$ and extent $\mathbf e$. More general gather/scatter regions are represented by an index plan plus rectangular source spans. A materialization of $(T,\tau,v)$ is a physical buffer containing logical version $v$ of the tile in a declared layout and dtype.
+
+The region map $V$ is many-to-many. One logical tile may have replicas in several tiers; one physical storage object may back multiple logical views or tied parameters. Every physical region is identified by a stable \code{storage\_id}, byte range, version, codec, checksum, and validity state. This prevents a model with tied input/output embeddings from being duplicated by the converter and preserves alias semantics through graph lowering.
+
+\subsection{Tile states and coherence}
+
+A tile instance transitions through the following abstract states:
+\[
+\begin{aligned}
+\textsc{Absent}&\rightarrow\textsc{Reading}\rightarrow\textsc{HostReady}\\
+&\rightarrow\textsc{Copying}\rightarrow\textsc{DeviceReady}\\
+&\rightarrow\textsc{Computing}\rightarrow\textsc{Clean/Dirty}\\
+&\rightarrow\textsc{Writing}\rightarrow\textsc{Absent}.
+\end{aligned}
+\]
+Not every backend uses every state. Each transition is guarded by an event or future, and every buffer lease has an epoch. A buffer cannot be recycled until all events that reference its epoch have completed. This rule is what makes asynchronous deletion safe; Python reachability alone has no scheduling semantics.
+
+Inference parameter tiles are immutable and may have multiple clean replicas. Mutable state uses single-writer or explicitly reduced multi-writer semantics. A dirty tile is durable only after its journal record and data checksum are committed according to the configured storage policy.
+
+\subsection{Tensor classes}
+
+The runtime distinguishes classes because their reuse and mutability differ:
+
+\begin{enumerate}
+  \item \emph{Parameters and constants} are immutable within an inference version and are candidates for prepacking and caching.
+  \item \emph{Activation frontier} tensors are request-specific, usually short-lived, and may be spilled or rematerialized.
+  \item \emph{Accumulators} hold partial reductions and have stricter numeric and writeback ordering.
+  \item \emph{KV or recurrent state} grows with sequence length or evolves per token; it needs page allocation, sharing, copy-on-write, and request lifecycle management.
+  \item \emph{Outputs and logits} may be streamed to downstream operators without full materialization.
+  \item \emph{Gradients and optimizer state} are mutable, versioned, and transactionally updated in training.
+  \item \emph{Transfer and kernel workspace} buffers are not model tensors but must be included in every memory proof.
+\end{enumerate}
+
+The invariant applies to all material classes. Pinning only $X$ and $Y$ while streaming weights is an optimization, not a valid universal assumption.
+
+\subsection{Functional graph and stream plans}
+
+Let $G=(N,E)$ be a finite functional graph after control-flow specialization for a request segment. Every node $n\in N$ is labeled by an operator $\omega\in\Oset$, logical input and output tensors, attributes, and semantic mode. Edges represent value dependencies, not physical buffers.
+
+\begin{definition}[Stream-decomposable operator]
+An operator $\omega$ is stream-decomposable under budget vector $\mathbf C$ if there exists a finite task graph $P_\omega$ such that:
+\begin{enumerate}
+  \item every task reads and writes finite regions of virtual tensors;
+  \item each task declares a bounded resource vector and a primitive kernel supported by some backend;
+  \item the peak admitted use of every tier does not exceed $\mathbf C$;
+  \item the completed output has the declared semantics; and
+  \item dependencies form a terminating schedule under the progress assumptions.
+\end{enumerate}
+The least capacity vector for which such a plan exists is the operator's \emph{minimum legal working set} for that backend and semantic mode.
+\end{definition}
+
+A stream plan is parameterized by shapes and may select among several loop nests. For example, a linear operator may keep an output accumulator stationary while sweeping input tiles, or keep an input tile resident while producing several output tiles. Both are correct; they differ in IO and memory.
+
+\subsection{Resource vectors and arenas}
+
+Every task $u$ has a resource vector
+\[
+  \mathbf r(u)=
+  (r_{0}^{\mathrm{persistent}},r_{0}^{\mathrm{scratch}},
+   r_{1}^{\mathrm{pinned}},r_{2}^{\mathrm{cache}},r_{3}^{\mathrm{spill}},
+   s_{\mathrm{copy}},s_{\mathrm{compute}},f_{\mathrm{io}},\ldots).
+\]
+The memory broker owns preallocated or otherwise hard-bounded arenas for guaranteed resources. A task is dispatchable only when its full vector can be atomically leased. Kernel libraries with data-dependent or algorithm-selected workspaces must either accept a caller-provided workspace bounded by the plan, be profiled and locked to an algorithm, or be excluded from the guaranteed path.
+
+For one device, a typical admitted bound is
+\begin{equation}
+\label{eq:device-bound}
+M_0 \le R_0
+ + q_W\lvert W_\tau\rvert
+ + q_X\lvert X_\tau\rvert
+ + q_Y\lvert Y_\tau\rvert
+ + \lvert A_\tau\rvert
+ + \lvert K_\tau\rvert
+ + U_\tau + Z_0,
+\end{equation}
+where $R_0$ is runtime reserve, $q_*$ are in-flight buffer counts, $A_\tau$ is reduction state, $K_\tau$ is resident recurrent/KV state, $U_\tau$ is bounded kernel workspace, and $Z_0$ is alignment and metadata overhead. Total model parameter bytes do not occur in \eqref{eq:device-bound}.
+
+\subsection{Plans as proof-carrying artifacts}
+
+An execution plan is immutable and serializable. It contains:
+
+\begin{itemize}
+  \item graph and checkpoint content hashes;
+  \item hardware and software capability fingerprints;
+  \item shape guards and request envelope;
+  \item operator implementation identifiers and semantic modes;
+  \item tile grids, loop orders, buffer counts, and workspace maxima;
+  \item per-tier memory and spill bounds;
+  \item task dependency templates and priority classes;
+  \item fallback chain and safe replan points;
+  \item expected IO volume and calibrated cost estimate.
+\end{itemize}
+
+The runtime validates the plan against current reservations before use. The plan is ``proof-carrying'' in the engineering sense that every allocation and task maps to a statically checkable budget item; it is not a machine-checked proof unless an optional formal verifier is used.
+
+\subsection{Architecture overview}
+Figure~\ref{fig:architecture} summarizes the separation between functional semantics, planning, scheduling, and physical storage tiers.
+
+\begin{figure}[H]
+\centering
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}[
+  node distance=5mm and 8mm,
+  box/.style={draw,rounded corners,align=center,minimum height=8mm,minimum width=24mm,fill=white},
+  tierbox/.style={draw,rounded corners,align=center,minimum height=10mm,minimum width=31mm},
+  arrow/.style={-{Latex[length=2.2mm]},thick}
+]
+  \node[box,fill=blue!8] (capture) {Graph capture\\and lowering};
+  \node[box,fill=blue!8,right=of capture] (planner) {Tile planner\\and cost model};
+  \node[box,fill=blue!8,right=of planner] (plan) {Validated\\execution plan};
+  \node[box,fill=green!8,below=10mm of planner] (sched) {Credit scheduler, memory broker, leases, events};
+  \node[tierbox,fill=orange!10,below left=10mm and -3mm of sched] (store) {Persistent store\\AMS / safetensors / mmap};
+  \node[tierbox,fill=orange!10,right=of store] (host) {Bounded host cache\\and pinned ring};
+  \node[tierbox,fill=orange!10,right=of host] (device) {Device arena\\and kernels};
+  \node[box,fill=purple!8,below=8mm of host] (vt) {Virtual tensor map, versions, checksums, KV pages};
+  \draw[arrow] (capture) -- (planner);
+  \draw[arrow] (planner) -- (plan);
+  \draw[arrow] (plan) -- (sched);
+  \draw[arrow] (sched) -- (store);
+  \draw[arrow] (sched) -- (host);
+  \draw[arrow] (sched) -- (device);
+  \draw[arrow,<->] (store) -- (host);
+  \draw[arrow,<->] (host) -- (device);
+  \draw[arrow,dashed] (vt) -- (store);
+  \draw[arrow,dashed] (vt) -- (host);
+  \draw[arrow,dashed] (vt) -- (device);
+\end{tikzpicture}%
+}
+\caption{\AMS separates logical tensors and graph semantics from physical residency. The plan fixes bounded resources; the scheduler moves versioned tiles through the hierarchy.}
+\label{fig:architecture}
+\end{figure}

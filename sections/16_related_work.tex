@@ -1,0 +1,42 @@
+\section{Related Work}
+\label{sec:related}
+
+\subsection{External-memory and IO-aware computation}
+
+The red--blue pebble game formalizes communication between memory levels and establishes lower bounds for numerical algorithms \cite{hong1981io}. \AMS follows this tradition by making physical traffic and bounded local storage part of the computation model. Its external-memory theorem is elementary; the systems contribution is to turn that principle into an LLM-wide operator, compiler, and runtime contract.
+
+FlashAttention tiles exact attention to reduce transfers between HBM and on-chip SRAM and analyzes IO complexity \cite{dao2022flashattention,dao2023flashattention2}. \AMS uses the same online-softmax algebra but introduces slower tiers and virtualizes Q/K/V, KV state, parameters, and outputs. Welder's tile-graph compiler coordinates fine-grained data reuse and can combine accelerator and host memory for large inputs \cite{shi2023welder}. \AMS is complementary: it makes bounded-residency executability a hard per-operator contract and includes persistent storage, runtime admission, failure semantics, and a scalar fallback.
+
+\subsection{LLM inference offload}
+
+FlexGen jointly places weights, activations, and attention cache across GPU, CPU, and disk and uses a cost optimization for throughput-oriented inference \cite{sheng2023flexgen}. It is the closest systems antecedent to \AMS. \AMS differs in emphasis and scope: it requires sub-tensor decomposition even when an individual layer/tensor does not fit, defines a general operator plugin contract and memory proof, virtualizes outputs and all state classes, and specifies a portable production runtime rather than one model-family execution engine.
+
+LLM in a Flash stores weights in flash and optimizes transferred bytes and contiguous read size using sparsity-aware techniques \cite{alizadeh2023llmflash}. PowerInfer exploits hot/cold neuron locality across GPU and CPU \cite{song2023powerinfer}. ZeRO-Inference offloads model weights and KV state and supports quantization \cite{deepspeed_zero_inference}. Hugging Face Accelerate dispatches layers across accelerators, CPU, and disk \cite{accelerate_big_model}. llama.cpp provides widely used quantized CPU/GPU local inference and layer offload \cite{llamacpp}. \AMS does not replace their optimized paths; its invariant requires a deeper fallback when the chosen unit of placement itself does not fit.
+
+Petals distributes model blocks across participating machines \cite{borzunov2022petals}. It addresses access through collaborative resources rather than a strictly local hierarchy, but its remote blocks can be viewed as an optional placement tier.
+
+\subsection{KV memory virtualization}
+
+vLLM's PagedAttention applies virtual-memory concepts to KV-cache allocation and sharing \cite{kwon2023pagedattention}. vTensor uses GPU virtual memory management to decouple logical tensor allocation from physical GPU pages. These systems focus primarily on serving-time dynamic KV or tensor memory inside GPU/host domains. \AMS adopts page-table ideas but applies one virtual tensor/version/resource contract to parameters, activations, outputs, KV, gradients, optimizer state, and persistent storage.
+
+\subsection{Training memory systems}
+
+ZeRO partitions optimizer, gradient, and parameter state across data-parallel workers \cite{rajbhandari2020zero}; ZeRO-Infinity adds CPU and NVMe offload \cite{rajbhandari2021zeroinfinity}. PyTorch FSDP provides industry-grade sharded training integrated with framework internals \cite{zhao2023fsdp}. vDNN, SuperNeurons, and SwapAdvisor virtualize or schedule activation memory and swapping for training \cite{rhu2016vdnn,wang2018superneurons,huang2020swapadvisor}. Activation checkpointing, Checkmate, and dynamic tensor rematerialization trade recomputation for saved activation memory \cite{chen2016sublinear,jain2019checkmate,kirisame2020dtr}. \AMS combines spill and recomputation in a common virtual-tensor plan and extends the minimum-tile invariant to operator parameters and outputs.
+
+\subsection{Parallelism}
+
+Megatron-LM and related systems use tensor and pipeline parallelism to distribute large language models across accelerators \cite{shoeybi2019megatron,narayanan2021efficient}. These approaches increase aggregate fast memory and throughput. \AMS composes with them but retains a one-machine external-memory fallback; adding hardware enlarges tiles and caches rather than changing logical semantics.
+
+\subsection{Architectures}
+
+Transformers define the principal attention/MLP workload \cite{vaswani2017attention}. Sparse MoE architectures such as Switch Transformers and Mixtral change the set of active expert parameters \cite{fedus2021switch,jiang2024mixtral}. Mamba and related state-space models use recurrent/scan structure \cite{gu2023mamba}. \AMS does not assume one architecture: each semantic operator supplies a bounded stream plan and primitive fallback.
+
+\subsection{Positioning of novelty}
+
+The ingredients of \AMS have extensive precedent. The defensible novelty is their composition around a testable invariant:
+
+\begin{quote}
+Every supported material tensor is virtual, every supported operator has a minimum-working-set plan, every task is resource-admitted, and every accepted finite request has a bounded-residency path whose fast-memory requirement is independent of total parameter size.
+\end{quote}
+
+Whether this composition yields publishable empirical value depends on implementation quality and evaluation. The paper deliberately avoids claiming that tiling or offload itself is new.

@@ -1,0 +1,182 @@
+\section{Automated Graph Transformation and Compiler Integration}
+\label{sec:compiler}
+
+Replacing instances of \code{nn.Linear} is not a sufficient graph transformation. Real model code uses functional operators, fused projections, tensor views, tied storage, custom kernels, dynamic control flow, and operations in which a parameter is read without calling its owning module. \AMS therefore compiles a functional graph into a virtual-tensor task program; module replacement is only a compatibility front end.
+
+\subsection{Front-end pipeline}
+
+For PyTorch, the preferred pipeline is:
+
+\begin{enumerate}
+  \item instantiate the model skeleton on a metadata device or import an exported graph without materializing parameters;
+  \item capture a sound graph with \code{torch.export} under explicit dynamic-shape constraints;
+  \item functionalize mutation and aliasing and apply selected decompositions to a stable ATen-level operator set;
+  \item lift parameters, buffers, constants, and state into explicit graph inputs or state objects;
+  \item propagate symbolic shapes, dtypes, layouts, and alias sets using fake/meta tensors;
+  \item canonicalize composite patterns into \AMS semantic operators;
+  \item lower each operator through the registry, perform liveness/fusion analysis, and build candidate tile graphs;
+  \item plan against a concrete hierarchy and emit a serializable execution plan plus runtime bindings.
+\end{enumerate}
+
+Current \code{torch.export} documentation describes a normalized graph and a decomposition path to a purely functional inference IR \cite{pytorch_export}. The implementation must pin a supported PyTorch version range and test graph contracts rather than treating internal APIs as stable. A framework-independent canonical IR prevents PyTorch version changes from infecting storage, planning, and runtime layers.
+
+\subsection{Canonical AMS IR}
+
+The canonical IR contains:
+
+\begin{itemize}
+  \item \code{Value}: logical shape, symbolic bounds, dtype, layout, alias/storage ID, mutability, and tensor class;
+  \item \code{Op}: semantic opcode, attributes, inputs, outputs, numerical contract, side-effect class, and source location;
+  \item \code{State}: request, model, RNG, KV, optimizer, and external resource handles;
+  \item \code{RegionEffect}: logical read/write regions and version transitions;
+  \item \code{Guard}: shape, dtype, device, control-flow, and model-version predicates;
+  \item \code{PlanChoice}: operator implementation candidates and cost/resource summaries;
+  \item \code{Barrier}: mutation, control-flow, determinism, or externally visible ordering boundary.
+\end{itemize}
+
+The IR is functional by default. Mutation is represented by versioned state outputs, making dependencies and commit points explicit. An in-place PyTorch operation becomes a new logical version that may reuse physical storage only after liveness proves no reader needs the old version.
+
+\subsection{Capture and dynamic shapes}
+
+A graph capture is valid for a shape domain, not merely one sample. The export front end records symbolic bounds for batch, sequence, vocabulary partitions, expert counts, and cache lengths. Unsupported data-dependent Python control flow is either represented through an IR control-flow operator, specialized with a guard, or rejected.
+
+Plans are specialized to request envelopes. For example, token-tile choices may be valid for $1\le p\le128$ and KV page counts up to a declared context bound. At runtime, guard failure selects another cached plan or triggers safe preflight; it never reuses a memory proof outside its shape domain.
+
+\subsection{Parameter and checkpoint import without full materialization}
+
+The importer reads metadata and byte offsets before data. For safetensors, it validates the header and builds virtual regions directly. For supported PyTorch ZIP checkpoints, memory-mapped loading and fake-tensor metadata can expose storage offsets without allocating complete storages \cite{pytorch_serialization}. Untrusted pickle execution is disabled in the default converter.
+
+The importer must preserve:
+
+\begin{itemize}
+  \item tied storages and views;
+  \item non-contiguous strides and storage offsets;
+  \item endian and dtype encoding;
+  \item quantization metadata and custom tensor subclasses only through registered importers;
+  \item missing, unexpected, and shape-mismatched state as fatal validation errors unless an explicit migration rule exists.
+\end{itemize}
+
+Conversion to the AMS container is streaming: read a bounded source range, transform/repack/checksum, and write a bounded destination chunk. Peak converter memory is itself constrained by a conversion plan.
+
+\subsection{Canonicalization and pattern recognition}
+
+After primitive decomposition, a pattern pass reconstructs high-level semantic units where useful. Examples include:
+
+\begin{itemize}
+  \item separate matmul, scale, mask, softmax, and value matmul into an attention op;
+  \item pairs of projections and elementwise multiplication into gated MLP;
+  \item residual add plus variance/mean operations into normalization;
+  \item top-$k$ router, dispatch, expert calls, and combine into MoE;
+  \item rotary trigonometric tables and pair rotations into RoPE;
+  \item recurrent/selective scan patterns into a registered state-space op.
+\end{itemize}
+
+Recognition is semantics-preserving and optional. Failure to recognize a pattern should still lower through primitive operators, although the resulting plan may transfer more data. Pattern rules include dtype, axis, mask, epsilon, and broadcasting guards; matching only operator names is unsafe.
+
+\subsection{Liveness, alias, and region analysis}
+
+Whole-tensor liveness is overly conservative. \AMS computes region-level liveness where tile pipelines expose it. A value may have a producer-consumer stream edge allowing each tile to die after consumption, even though the logical tensor remains live as a name. The analysis records whether a tile can be:
+
+\begin{itemize}
+  \item forwarded in fast memory;
+  \item recomputed from still-available ancestors;
+  \item spilled and read later;
+  \item aliased with a dead input buffer;
+  \item discarded after an online summary consumes it.
+\end{itemize}
+
+Alias analysis starts from checkpoint storage IDs and graph view operators. A write through an alias creates a version dependency affecting all views. Inference parameters are immutable; attempts to mutate them reject the plan unless the operator is deliberately in training or adaptation mode.
+
+\subsection{Operator registry and fallback chain}
+
+Each semantic opcode maps to ordered implementations:
+
+\begin{enumerate}
+  \item device-specific fused tiled kernel;
+  \item generic device composition over smaller primitives;
+  \item host vector/BLAS tile plan;
+  \item scalar external-memory interpreter.
+\end{enumerate}
+
+An implementation advertises support predicates and resource formulas. Compilation considers only implementations whose predicates hold for the numeric mode and shape. The scalar fallback is required for core primitive arithmetic and indexing, but not for arbitrary opaque custom calls. A graph is supported only if every reachable op has a complete chain.
+
+Plugins register through a stable Python entry point for orchestration and a versioned C ABI for native kernels. Registration includes a cryptographic package identity in locked-down deployments. The compiler records plugin version and implementation ID in the plan.
+
+\subsection{Task-graph lowering}
+
+For each chosen operator plan, lowering emits a parametric task template rather than eagerly instantiating every tile for a long generation. A template defines coordinate iterators, dependency functions, resource formulas, and task factories. The executor instantiates a bounded window of future tasks to avoid metadata growth proportional to all model elements or all future tokens.
+
+A linear output tile, for example, creates one accumulator-init task, a chain or tree of tile multiply-accumulate tasks, one epilogue task, and one commit task. Prefetch tasks are speculative predecessors whose failure can be retried synchronously; correctness never depends on a prefetch hint.
+
+\subsection{Fusion and code generation}
+
+Fusion is performed at two levels.
+
+\paragraph{Semantic tile fusion.}
+The planner connects producer and consumer tiles without external materialization, as discussed in Section~\ref{sec:planning}.
+
+\paragraph{Kernel fusion.}
+A backend may JIT or select a fused kernel for decode, dequantize, matmul, bias, and activation. The generated kernel must accept caller-owned input/output/workspace buffers and publish a worst-case workspace before plan admission. Compilation caches binaries by source/IR hash, compiler version, target architecture, flags, and numeric mode. Runtime compilation occurs during preflight or a controlled warm-up, never as an unbudgeted allocation on the request critical path.
+
+\subsection{Framework-facing APIs}
+
+Three integration levels are recommended:
+
+\begin{enumerate}
+  \item \code{ams.load\_model(...)} returns an \AMS-native generation interface and is the guaranteed path;
+  \item a PyTorch module facade accepts tensors, delegates an exported segment to \AMS, and returns tensors or virtual handles;
+  \item an optional \code{torch.compile} custom backend lowers captured graphs when its graph boundaries and state model are compatible.
+\end{enumerate}
+
+The native API should be implemented first. Eager hooks that swap whole module weights are useful for compatibility but cannot provide the full invariant when a module or output is larger than the target tier.
+
+\subsection{Hugging Face integration}
+
+A Transformers adapter maps configuration, tokenizer, generation parameters, cache semantics, logits processors, stopping criteria, and model-specific rotary/attention variants to the canonical API. It must not assume every model follows a named class hierarchy. Supported models are conformance-tested by exported graph signatures and operator coverage.
+
+Logits processors are classified as streamable, full-vector, or unsupported. Greedy, temperature, repetition penalty, top-$k$, and many masking processors can stream. Processors that inspect or reorder the full distribution receive a virtual logits handle and may trigger external materialization. User-defined Python callbacks run outside the Level II guarantee unless sandboxed and resource-declared.
+
+\subsection{Compiler diagnostics}
+
+A failed compilation reports the shortest actionable cause:
+
+\begin{itemize}
+  \item source graph location and unsupported opcode;
+  \item missing semantic or backward rule;
+  \item unbounded dynamic shape or generation state;
+  \item alias/mutation pattern that prevents safe streaming;
+  \item no candidate workspace fitting the selected backend;
+  \item checkpoint layout requiring unavailable conversion capacity;
+  \item numerical policy unsupported by all implementations.
+\end{itemize}
+
+The diagnostic includes suggested registered decompositions or alternative policies, but never silently falls back to an approximate result.
+
+\subsection{Compiler pipeline diagram}
+Figure~\ref{fig:compiler} summarizes the sound lowering path from framework graph to a serializable resource-validated plan.
+
+\begin{figure}[H]
+\centering
+\resizebox{0.96\linewidth}{!}{%
+\begin{tikzpicture}[
+  node distance=5.5mm,
+  box/.style={draw,rounded corners,minimum width=41mm,minimum height=8.5mm,align=center},
+  arr/.style={-{Latex[length=2mm]},thick}
+]
+  \node[box,fill=blue!9] (model) {Framework model + metadata-only checkpoint};
+  \node[box,fill=blue!9,below=of model] (export) {Sound capture, functionalization, decomposition};
+  \node[box,fill=green!9,below=of export] (ir) {Canonical AMS IR: values, effects, guards, aliases};
+  \node[box,fill=green!9,below=of ir] (passes) {Pattern recognition, liveness, fusion, operator candidates};
+  \node[box,fill=orange!12,below=of passes] (plan) {Hierarchy-aware planning and resource proof};
+  \node[box,fill=purple!9,below=of plan] (exec) {Serializable plan + parametric task templates};
+  \draw[arr] (model) -- (export);
+  \draw[arr] (export) -- (ir);
+  \draw[arr] (ir) -- (passes);
+  \draw[arr] (passes) -- (plan);
+  \draw[arr] (plan) -- (exec);
+  \node[draw,dashed,rounded corners,fit=(ir)(passes),inner sep=3mm,label=right:{framework-independent core}] {};
+\end{tikzpicture}%
+}
+\caption{The automated transformer operates on a functional graph and virtual storage, not only on module classes.}
+\label{fig:compiler}
+\end{figure}

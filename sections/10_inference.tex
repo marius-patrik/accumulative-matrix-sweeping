@@ -1,0 +1,122 @@
+\section{Inference Engine}
+\label{sec:inference}
+
+The inference engine applies the compiler and runtime to finite autoregressive requests. The capacity invariant applies to both prompt processing and token generation, including KV state and vocabulary operations.
+
+\subsection{Request model}
+
+A request descriptor contains:
+
+\begin{itemize}
+  \item token IDs or a bounded token stream;
+  \item maximum prompt and generation lengths;
+  \item sampling and logits-processing policy;
+  \item beam, speculative, prefix-sharing, and session options;
+  \item numerical and deterministic mode;
+  \item latency/throughput priority and resource quota;
+  \item durable-session and cancellation policy.
+\end{itemize}
+
+The request state includes current token position, RNG counters, stop automaton, KV page table, optional recurrent state, output sink, and plan phase. This state is finite under the request envelope and is stored as virtual tensors and small metadata.
+
+\subsection{Model opening and cold start}
+
+Opening a model validates manifests, hashes, layouts, tokenizer compatibility, graph/operator versions, and signature policy. It does not load the complete checkpoint. The engine maps metadata, opens storage handles, reserves runtime bases, loads or produces a plan, and optionally warms selected kernels and hot tiles.
+
+A cold-start trace distinguishes:
+
+\begin{enumerate}
+  \item manifest and graph validation;
+  \item conversion/repacking, if required;
+  \item plan generation and calibration;
+  \item kernel compilation;
+  \item first physical checkpoint reads;
+  \item steady-state request execution.
+\end{enumerate}
+
+Benchmark reports must not mix one-time conversion with per-request latency unless measuring deployment cold start.
+
+\subsection{Prefill}
+
+Prompt prefill is processed in token chunks bounded by the plan. For each transformer block, a high-performance path may stream weight panels while computing several token rows, produce Q/K/V tiles, append K/V pages, and execute tiled attention. A low-memory path spills activation tiles between projections and layers.
+
+The activation frontier can be reduced by processing one token block through the complete layer stack, but causal attention requires access to earlier K/V state, which is virtualized. Alternative layer-major schedules may reuse weights across prompt blocks but require storing more intermediate state. The planner compares these choices.
+
+For exact prompt logits at every token, outputs are committed for all requested positions. For ordinary generation, only positions required by the API need pass through the LM head, reducing vocabulary projection work.
+
+\subsection{Decode}
+
+Each decode step is a finite graph:
+
+\begin{enumerate}
+  \item embed the current token and position;
+  \item execute all model blocks, reading weight tiles and prior state;
+  \item append new K/V or recurrent state;
+  \item stream the LM head and selection/softmax policy;
+  \item draw or choose the next token;
+  \item update stop state and commit the token boundary.
+\end{enumerate}
+
+The token boundary is the primary safe point. A plan switch, durable session checkpoint, resource resize, or cancellation can occur after all state for token $t$ is committed and before token $t+1$ begins.
+
+For a model much larger than all cacheable memory, decode may reread most dense weights each token. The runtime exposes a per-token model-bytes-read metric and lower-bound-normalized bandwidth utilization so users see the physical reason for latency.
+
+\subsection{Continuous batching and weight amortization}
+
+Although one request establishes local executability, throughput improves when multiple requests share streamed weights. The scheduler groups decode-ready tokens with compatible model version, plan, position/mask class, and numeric mode. A weight tile is loaded once and applied to a token cohort. Cohort size is bounded by activation and KV budgets.
+
+Continuous batching must not delay a latency-critical request indefinitely. Each request has a maximum batching wait and deadline slack. Cohorts can be split at tile boundaries; request-specific accumulators and state remain isolated.
+
+Prefill and decode compete differently for resources. The policy may reserve a decode lane of device and IO credits while admitting prefill opportunistically. Chunked prefill prevents one long prompt from monopolizing the model sweep.
+
+\subsection{Weight cache policy}
+
+A cache hierarchy can retain:
+
+\begin{itemize}
+  \item small normalization and bias tensors;
+  \item first/last layers important to latency;
+  \item frequently reused attention or MLP panels;
+  \item hot experts under observed routing;
+  \item entire layers or model when capacity permits;
+  \item backend-specific decoded/packed tiles.
+\end{itemize}
+
+The engine compares reuse value against KV and accumulator pressure. Cache admission is optional and revocable; no correctness path assumes a hit. Learned or profile-guided policies may be plugins, but a deterministic cost-aware policy remains the baseline.
+
+\subsection{KV tiering and context growth}
+
+A KV page begins in the fastest practical tier, ages to host cache, and may spill to persistent storage. Attention prefetches pages in logical order or according to sparse mask structure. Prefix pages are immutable and reference-counted; beam branches share pages until copy-on-write.
+
+Capacity preflight uses the maximum context and concurrent-request envelope. If the user asks for an unbounded session, the API must require a retention policy: finite context window, recurrent compression, external session storage with bounded active range, or explicit per-token growth until a storage quota stops admission. The invariant does not turn an unbounded state process into a finite one.
+
+\subsection{Speculative and beam decoding}
+
+Speculative decoding introduces draft state and verification batches. Each branch has versioned KV deltas. Accepted tokens atomically promote their pages; rejected deltas are released after in-flight events. The target model's exact acceptance semantics are preserved. The planner accounts for worst-case speculative width and may disable speculation under minimal budgets.
+
+Beam search shares prefix pages and maintains per-beam scores and parent pointers. Vocabulary top-$k$ can stream candidates across beams. Exact beam pruning requires a global candidate comparison, implemented by bounded heaps and external runs if the candidate set exceeds host memory.
+
+\subsection{Output and backpressure}
+
+Generated tokens are written to an output sink with bounded buffering. If the caller stops reading, the engine applies backpressure and eventually pauses request admission at a token boundary; it does not accumulate an unbounded output queue. Text decoding may be incremental, but tokenizer state and byte fragments are included in request memory.
+
+\subsection{CPU-only and no-accelerator operation}
+
+The CPU backend uses a bounded DRAM arena and memory-mapped or direct checkpoint reads. It may call BLAS for tiles or use vectorized kernels; the scalar interpreter is the final fallback. A model larger than DRAM can therefore execute directly from storage, subject to the same finite-capacity and operator conditions. GPU-specific concepts such as pinned staging collapse to simpler paths, but plan and virtual-tensor semantics are unchanged.
+
+\subsection{Session durability}
+
+A durable session checkpoint contains model version, committed token ordinal, token history or sufficient tokenizer state, RNG counter, KV/recurrent virtual region map, checksums, sampling policy, and plan compatibility metadata. It is committed at a token boundary. Recovery may use a different tile plan or backend because logical state is independent of physical device buffers.
+
+\subsection{Inference acceptance contract}
+
+For every model in the conformance suite and every finite request within a declared envelope, an accepted release must demonstrate:
+
+\begin{itemize}
+  \item completion on a configuration where the checkpoint exceeds accelerator memory;
+  \item completion on at least one configuration where the checkpoint exceeds host DRAM and resides partly on storage;
+  \item measured managed peak memory within the plan bound plus an explicitly defined measurement tolerance;
+  \item output parity with the reference mode;
+  \item cleanup to baseline after success, cancellation, and injected failure;
+  \item stable error classification when preconditions do not hold.
+\end{itemize}

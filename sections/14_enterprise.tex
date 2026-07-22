@@ -1,0 +1,171 @@
+\section{Enterprise-Grade Reference Implementation}
+\label{sec:enterprise}
+
+The mathematical invariant is only useful if the implementation makes its assumptions enforceable. This section defines the architecture, operational controls, security posture, compatibility rules, and release discipline expected of a production repository. Concrete interfaces and repository layout appear in Appendices~\ref{app:interfaces} and \ref{app:repository}.
+
+\subsection{Language and process boundaries}
+
+A pragmatic implementation uses:
+
+\begin{itemize}
+  \item Python for public APIs, framework capture, configuration, high-level planning, and model integrations;
+  \item a native core in modern C++ or Rust for arenas, leases, scheduler queues, storage IO, checksums, task state, and backend ABI;
+  \item CUDA/HIP/Metal/SYCL or portable kernel code for accelerator backends;
+  \item generated JSON Schema and typed models for manifests and configuration;
+  \item subprocess isolation for untrusted checkpoint conversion and optional custom plugins.
+\end{itemize}
+
+The native core owns objects whose lifetime participates in the memory guarantee. Python wrappers hold opaque handles; garbage collection is not the primary release mechanism. Explicit close/cancel and context-manager semantics are mandatory, with finalizers only as leak diagnostics.
+
+\subsection{Layered architecture}
+
+The repository is divided into six stable layers.
+
+\begin{enumerate}
+  \item \textbf{Public API and integrations}: model opening, preflight, generation, training session, CLI, PyTorch and Transformers adapters.
+  \item \textbf{Compiler}: canonical IR, importers, decompositions, shape/alias/liveness passes, operator registry, cost model, and plan serializer.
+  \item \textbf{Runtime}: engine, scheduler, broker, task state machine, events, virtual tensor manager, KV manager, and transactions.
+  \item \textbf{Storage}: manifest, range store, cache, AMS container, safetensors, mmap/direct IO, checksums, and optional direct-device adapters.
+  \item \textbf{Backends and operators}: CPU reference, accelerator backends, kernels, codecs, and operator plugins.
+  \item \textbf{Operations}: telemetry, security, fault injection, benchmark harness, packaging, CI, release, and documentation.
+\end{enumerate}
+
+Dependencies point downward. Operator plugins depend on public backend/runtime contracts, not internal scheduler classes. Framework adapters cannot reach directly into device allocators.
+
+\subsection{Configuration}
+
+Configuration is immutable after preflight except fields explicitly marked runtime-tunable. It includes:
+
+\begin{itemize}
+  \item tier paths, quotas, reserves, alignment, direct-IO and durability options;
+  \item backend preference and forbidden devices;
+  \item numerical and deterministic policy;
+  \item tile/autotune limits and plan-cache policy;
+  \item request concurrency, context, batching, and fairness limits;
+  \item checksum, signature, encryption-at-rest integration, and plugin trust policy;
+  \item telemetry destinations, redaction, and trace sampling;
+  \item retry, timeout, fault, and graceful-shutdown policy.
+\end{itemize}
+
+Unknown fields are errors in strict mode. Every run records the resolved configuration with secrets removed. Environment-variable overrides map through the same schema and validation.
+
+\subsection{Concurrency model}
+
+The runtime uses a bounded number of long-lived worker pools:
+
+\begin{itemize}
+  \item one scheduler/control executor;
+  \item storage completion and optional decompression pools with bounded queues;
+  \item backend-owned transfer and compute queues/streams;
+  \item telemetry export isolated from the critical path;
+  \item optional conversion or verification workers.
+\end{itemize}
+
+No task creates an unbounded thread. Queue capacity is a brokered resource. Callbacks are non-blocking and enqueue state transitions; expensive work is a task. Locks have a documented order, and the lease/broker path avoids calling external code while holding global locks.
+
+\subsection{State machines}
+
+Request, task, lease, tile, and transaction states are explicit enums with validated transitions. For example, a task moves
+\[
+\begin{aligned}
+\textsc{Created}&\to\textsc{WaitingDeps}\to\textsc{Ready}\\
+&\to\textsc{Admitted}\to\textsc{Submitted}\\
+&\to\{\textsc{Succeeded},\textsc{Failed},\textsc{Cancelled}\}.
+\end{aligned}
+\]
+A terminal task releases leases only after all associated events are terminal. Illegal transitions produce invariant violations and crash the affected engine instance in fail-fast development mode; production isolates the request, emits a core diagnostic, and prevents reuse of suspect buffers.
+
+State machines are model-checked or property-tested for cancellation races, duplicate completions, event reordering, and shutdown. The scheduler's reference model is small enough for exhaustive exploration at low task counts.
+
+\subsection{Reliability and crash consistency}
+
+The runtime distinguishes ephemeral inference, durable inference sessions, and training. Ephemeral inference needs cleanup and integrity but may not fsync state. Durable sessions and training use journals and atomic manifest publication as described earlier.
+
+Storage writes are content-addressed or versioned, never in-place over the sole valid copy. Checksums are verified at read boundaries and may be cached with authenticated file identity. A scrubber can verify idle checkpoint chunks. Storage-full conditions are preflighted and monitored; a reserved emergency segment permits journal completion and clean failure.
+
+Graceful shutdown stops admission, cancels or completes requests according to policy, quiesces backends, commits required state, releases leases, closes stores, and flushes telemetry. Forced shutdown relies on journal recovery.
+
+\subsection{Security model}
+
+Model files, custom plugins, prompts, and user configuration are untrusted inputs unless explicitly trusted. Required controls include:
+
+\begin{itemize}
+  \item no default execution of checkpoint pickle or arbitrary model repository code;
+  \item strict bounds and integer-overflow checks on every shape, stride, offset, length, codec expansion, and allocation formula;
+  \item canonical path handling that rejects traversal and symlink policy violations;
+  \item manifest and chunk checksums, optional signed root manifests, and provenance recording;
+  \item decompression ratios and CPU-time quotas to prevent archive bombs;
+  \item plugin allowlists, signatures, ABI validation, and optional process sandboxing;
+  \item tenant quotas for memory, IO, compute, storage, context, and output;
+  \item secret and prompt redaction in logs/traces; tensor bytes absent by default;
+  \item fuzzing of parsers, manifests, codecs, operator attributes, and RPC/CLI inputs;
+  \item software bill of materials, dependency scanning, reproducible packages where practical, and signed release artifacts.
+\end{itemize}
+
+Custom native kernels remain a high-trust extension because they execute in the process and device context. A plugin that cannot satisfy the workspace and lifetime ABI is outside the bounded-allocation guarantee.
+
+\subsection{Compatibility and versioning}
+
+The project follows semantic versioning for public Python APIs and separate versioning for:
+
+\begin{itemize}
+  \item canonical IR schema;
+  \item plan schema;
+  \item AMS container format;
+  \item native plugin ABI;
+  \item backend pack/cache format;
+  \item telemetry event schema.
+\end{itemize}
+
+Readers support a declared backward-compatible range and reject unknown major versions. Migrations are streaming and idempotent. Plans are disposable caches and may be regenerated; canonical checkpoints and session state require durable migration tooling.
+
+A compatibility matrix lists Python, PyTorch, compiler, OS, driver, backend, architecture, and filesystem versions. Unsupported combinations fail preflight with the matrix rule, not with an arbitrary kernel error.
+
+\subsection{API stability and extension points}
+
+Stable public interfaces include:
+
+\begin{itemize}
+  \item \code{open\_model}, \code{preflight}, \code{generate}, \code{stream\_generate}, and session lifecycle;
+  \item backend, storage, codec, operator, planner-policy, logits-processor, and telemetry plugin protocols;
+  \item manifest and plan inspection CLIs;
+  \item structured error codes and diagnostic payloads.
+\end{itemize}
+
+Internal tile/task classes are not public until their invariants are mature. Extension interfaces are capability-negotiated and versioned. A plugin conformance runner validates resource bounds, cancellation, numerical behavior, serialization, and thread safety before it is accepted into guaranteed mode.
+
+\subsection{Operational tooling}
+
+The CLI should provide:
+
+\begin{description}[leftmargin=3.5cm,style=nextline]
+  \item[\code{ams convert}] Streaming checkpoint import, repack, quantize if explicitly selected, checksum, sign, and verify.
+  \item[\code{ams inspect}] Display tensor layouts, aliases, chunk ranges, graph coverage, and integrity without loading data.
+  \item[\code{ams preflight}] Produce plan, exact memory/spill bounds, unsupported ops, estimated traffic, and fallback chain.
+  \item[\code{ams run}] Execute generation with bounded configuration and machine-readable results.
+  \item[\code{ams benchmark}] Run calibrated micro/macro suites and export a reproducibility bundle.
+  \item[\code{ams trace}] Summarize critical path, bandwidth, stalls, cache, memory, and plan deviations.
+  \item[\code{ams recover}] Inspect and recover journals, orphaned versions, and durable sessions.
+  \item[\code{ams doctor}] Validate drivers, storage behavior, direct IO, pinned memory, clocks, permissions, and backend conformance.
+\end{description}
+
+All commands have JSON output and stable exit codes for automation.
+
+\subsection{Documentation standard}
+
+Documentation includes architecture decision records, contributor setup, API references, operator authoring guide, backend guide, checkpoint format, security model, performance tuning, numerical semantics, failure catalog, runbooks, and model-support matrix. Every claimed guarantee links to its preconditions and corresponding tests. Examples use small redistributable checkpoints or synthetic tensors and run in CPU-only CI.
+
+\subsection{Definition of enterprise readiness}
+
+A release is enterprise-ready only when:
+
+\begin{itemize}
+  \item the core inference invariant passes the conformance hardware matrix;
+  \item memory and workspace bounds are measured and reconciled with plan accounting;
+  \item parsers and native core pass fuzzing and sanitizers;
+  \item fault, cancellation, recovery, and storage-full tests pass;
+  \item observability and error codes support incident diagnosis without debug builds;
+  \item compatibility, security, backup/recovery, and upgrade documentation are complete;
+  \item performance regressions are gated against stable baselines;
+  \item release artifacts are signed and traceable to source and CI evidence.
+\end{itemize}

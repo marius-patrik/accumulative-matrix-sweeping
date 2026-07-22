@@ -1,0 +1,50 @@
+\section{Limitations and No-Free-Lunch Boundaries}
+\label{sec:limitations}
+
+\subsection{Storage capacity remains finite}
+
+``Any LLM'' means any finite supported model whose representation and spill fit the configured hierarchy. A fixed disk cannot hold an arbitrarily large checkpoint. An unbounded conversation or training run needs a retention or quota policy. The runtime can move the capacity boundary to a slower/larger tier; it cannot remove finite storage.
+
+\subsection{Minimum working set is nonzero}
+
+Every primitive needs operands, result space, metadata, and executable state. A GPU may be too constrained or unsupported even for the smallest legal kernel. The CPU scalar fallback reduces the requirement but still needs process and OS memory. If no backend can reserve its minimum, preflight correctly rejects the request.
+
+\subsection{Time can be prohibitive}
+
+The dense read lower bound means a model streamed from storage may require reading most parameter information for each non-amortized pass. At batch-one decode, this can make token latency proportional to model bytes divided by effective bandwidth. Tiny tiles also incur seek, launch, synchronization, and underutilization costs. \AMS guarantees a path, not interactivity.
+
+\subsection{Persistent-storage endurance and energy}
+
+Inference is primarily read-heavy, but KV spill, activation spill, durable sessions, and training generate writes. High write amplification can consume SSD endurance and energy. The planner should report projected writes and support read-only or write-budget policies. No storage device is assumed to have infinite endurance.
+
+\subsection{Operator coverage is a real boundary}
+
+Opaque custom kernels, arbitrary Python side effects, data-dependent native allocations, and external services may not be stream-decomposable through the registered primitive set. The compiler must reject uncovered paths. Claiming universal support by falling back to ordinary execution would reintroduce the same residency failure.
+
+\subsection{Shared-system interference}
+
+A user-space reservation can control its arenas but not arbitrary peer processes, drivers, display servers, kernel memory, thermal throttling, or device resets. Exclusive deployment improves the operational guarantee. Cooperative pressure can trigger a safe replan; non-cooperative revocation is a terminal environmental failure.
+
+\subsection{Floating-point identity}
+
+Different tile shapes and parallel reductions can alter floating-point rounding. Exact real-arithmetic correctness does not imply bitwise identity with a monolithic vendor kernel. The system exposes deterministic and tolerance modes, but cross-platform identical bits may require slow reference primitives.
+
+\subsection{Data confidentiality}
+
+Checkpoint and activation spill expands the set of storage locations containing sensitive data. Encryption, secure deletion, access control, tenant isolation, and crash-dump policy are deployment responsibilities supported by adapters but not solved by tiling alone. Direct IO and memory mapping have platform-specific security considerations.
+
+\subsection{Planning complexity and calibration drift}
+
+The plan space is large, and cost models can be wrong under contention, firmware changes, thermal limits, or filesystem cache effects. Safe fit does not depend on cost accuracy, but performance does. Plans and calibrations must be versioned, traced, and invalidated conservatively.
+
+\subsection{Graph capture limitations}
+
+Framework export may fail on dynamic Python, unsupported tensor subclasses, custom dispatch, or model repository code. A native model adapter can bypass capture, but then assumes responsibility for a complete semantic graph. The project needs a transparent support matrix rather than a blanket claim about every repository called an LLM.
+
+\subsection{Training practicality}
+
+External-memory training is theoretically possible but may multiply model, gradient, optimizer, activation, and checkpoint IO. Full training of extremely large dense models on one local machine can be economically or temporally unreasonable. Parameter-efficient fine-tuning and distributed composition are more practical first targets.
+
+\subsection{Novelty risk}
+
+Prior systems already combine offload, heterogeneous memory, paging, tile scheduling, and rematerialization. A research contribution must be judged on the rigor and usefulness of the invariant, operator generality, implementation, and empirical results. Renaming existing row-wise offload would not suffice. The architecture in this paper intentionally raises the implementation bar to a complete virtual-tensor runtime.

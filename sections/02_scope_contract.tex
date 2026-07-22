@@ -1,0 +1,115 @@
+\section{Scope, Claim Taxonomy, and Execution Contract}
+\label{sec:scope}
+
+A universal-sounding systems claim is useful only if its quantifiers and failure domains are explicit. This section defines the class of computations to which the \AMS invariant applies and separates mathematical executability from operational guarantees on shared hardware.
+
+\subsection{Finite supported LLMs}
+
+\begin{definition}[Finite supported model]
+A \emph{finite supported model} is a tuple
+\[
+  M=(G,\Theta,\Sigma,\Oset,\mathcal S),
+\]
+where $G$ is a finite control/data-flow description for one model step, $\Theta$ is a finite collection of parameter tensors, $\Sigma$ is finite mutable model state, $\Oset$ is an operator set for which the runtime has semantics and a stream plan or primitive fallback, and $\mathcal S$ is a finite serialization of $\Theta$, constants, metadata, and operator configuration.
+\end{definition}
+
+An autoregressive request becomes finite after fixing its input and a finite stopping rule, such as a maximum number of generated tokens. Dynamic branches are permitted when every executed branch uses supported operators and the request terminates. The definition includes dense transformers, MoE transformers, common recurrent and convolutional language models, and selective state-space models when their operators are registered. It does not automatically include arbitrary Python side effects, opaque device binaries with unknown memory requirements, network services, or native extensions that bypass the resource broker.
+
+\begin{definition}[Memory hierarchy]
+A local memory hierarchy is an ordered family
+\[
+  \mathcal H=(\tier{0},\tier{1},\ldots,\tier{h}),
+\]
+where \tier{0} is the compute-nearest address space, capacities are $C_0,\ldots,C_h$, and adjacent or permitted non-adjacent transfers have finite bandwidth and latency. A tier may be accelerator memory, unified memory, pinned host memory, pageable DRAM, memory-mapped persistent memory, SSD/NVMe, or another locally accessible block/object store.
+\end{definition}
+
+``Local'' means that the request does not depend on an external model-serving party. The hierarchy may contain multiple devices in one workstation or node. A remote collaborative network such as Petals \cite{borzunov2022petals} can be integrated as a storage or compute tier, but it is not required by the core invariant.
+
+\subsection{Necessary preconditions}
+
+The invariant is conditional on the preconditions in \cref{tab:preconditions}. They are not implementation caveats to be hidden in documentation; they are part of the public API contract and must be checked by preflight where checkable.
+
+\begin{table}[t]
+\centering
+\caption{Preconditions for bounded-residency execution.}
+\label{tab:preconditions}
+\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}X@{}}
+\toprule
+Condition & Operational meaning \\
+\midrule
+Finite representation & Model, tokenizer assets, metadata, request, and finite generation horizon are representable with finite bytes. \\
+Backing capacity & The slowest usable tier has enough free, quota-approved capacity for checkpoint data, mutable state, temporary spill, journal, and integrity metadata. \\
+Minimum working set & Some compute backend can reserve the runtime base plus one legal primitive tile, its accumulator, transfer buffers, and bounded workspace. A CPU scalar fallback may make this requirement very small, but not zero. \\
+Supported semantics & Every executed operator lowers to a registered stream plan or to a primitive interpreter whose semantics are defined. \\
+Progressing resources & Required reads, writes, transfers, and kernels eventually complete or return an explicit non-memory error. \\
+Controlled allocations & All material runtime allocations in guaranteed tiers pass through the memory broker or are bounded and reserved during preflight. \\
+Finite numeric format & Tensor elements and operator metadata have finite encodings; optional decompression has declared worst-case expansion bounds. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+A system can satisfy the minimum-working-set condition without an accelerator. The portable floor is a CPU backend that reads a bounded number of scalars or small vectors from persistent storage, performs a primitive arithmetic operation, and writes the result back. Such execution may be extremely slow, but it proves that GPU capacity is not the computability boundary. An accelerator backend is an optimization selected when its reserved arena can hold a legal tile.
+
+\subsection{Three levels of guarantee}
+
+\begin{definition}[Level I: external-memory executability]
+For every finite supported model and finite request satisfying the backing-capacity and primitive-progress assumptions, there exists a finite schedule whose fastest-tier working set is bounded independently of total parameter size.
+\end{definition}
+
+This is a mathematical existence statement. The scalar construction in Theorem~\ref{thm:external-eval} is deliberately inefficient but universal over the supported finite operator semantics.
+
+\begin{definition}[Level II: bounded-allocation runtime safety]
+After successful preflight, \AMS shall not issue an allocation through its managed allocators that exceeds the capacities reserved by the accepted plan. Every task carries a resource vector, and dispatch is forbidden until the complete vector is atomically leased.
+\end{definition}
+
+Level II prevents out-of-memory failures caused by the runtime's own planned allocations inside its reservation envelope. It is stronger than periodically observing free memory. It does not imply that the operating system, driver, another process, a faulty plugin, or hardware cannot invalidate a reservation.
+
+\begin{definition}[Level III: operational completion]
+On a concrete machine, a request completes when Level I preconditions hold, Level II reservations remain valid, the device and storage stack do not fail, the process is not killed, and no unbrokered component consumes required resources.
+\end{definition}
+
+Operational completion is monitored and recoverable but cannot be made unconditional by a user-space library. Production wording should therefore use ``bounded-residency execution under the declared resource contract,'' not ``OOM is mathematically impossible on any hardware.''
+
+\subsection{Memory-failure taxonomy}
+
+\AMS classifies memory-related outcomes so callers can distinguish an unsupported request from transient resource pressure.
+
+\begin{description}[leftmargin=2.9cm,style=nextline]
+  \item[\code{PREFLIGHT\_NO\_BACKING}] Checkpoint plus worst-case spill cannot fit in any configured storage plan.
+  \item[\code{PREFLIGHT\_NO\_WORKING\_SET}] No backend can reserve its minimum legal tile and runtime base.
+  \item[\code{UNSUPPORTED\_OP}] The captured graph contains an operator without a decomposition or permitted fallback.
+  \item[\code{RESERVATION\_LOST}] A previously valid exclusive or cooperative resource reservation is externally invalidated.
+  \item[\code{BROKER\_VIOLATION}] A plugin or kernel requests memory outside its declared workspace contract.
+  \item[\code{IO\_FAILURE}] Storage or transfer fails, times out under policy, or returns corrupt data.
+  \item[\code{NUMERIC\_FAILURE}] Strict policy detects non-finite or out-of-range values.
+  \item[\code{CANCELLED}] The caller cancels the finite request; all leases are reclaimed after completion events.
+\end{description}
+
+Only the first two are ``does not fit'' outcomes, and both occur before model execution. A planner should attempt successively smaller accelerator tiles and then a CPU or scalar plan before returning \code{PREFLIGHT\_NO\_WORKING\_SET}.
+
+\subsection{Exact, equivalent, and approximate modes}
+
+The phrase ``run the model'' is ambiguous unless numerical semantics are declared.
+
+\begin{enumerate}
+  \item \textbf{Exact algebraic mode} requires equality in the underlying exact arithmetic model. It is used for proofs and operator-law tests.
+  \item \textbf{Order-preserving floating mode} uses the checkpoint dtype and accumulation policy while preserving a specified scalar reduction order. It targets bitwise reproducibility where the backend implements the same primitive rounding behavior.
+  \item \textbf{Numerically equivalent mode} permits reassociation, fused operations, and backend-specific kernels subject to documented error tolerances and deterministic/non-deterministic declarations.
+  \item \textbf{Approximate mode} permits quantization, sparsity, lossy compression, approximate attention, or pruning. Approximation is optional and must never be silently required for the capacity invariant.
+\end{enumerate}
+
+This separation prevents a common category error: low-bit storage can improve capacity and bandwidth, but universal external-memory executability does not depend on accepting an accuracy change.
+
+\subsection{Non-goals}
+
+The first release need not promise competitive latency for every model/hardware pair, automatic decomposition of arbitrary native code, immunity to hardware failure, zero-copy access on every platform, or identical floating-point bits across heterogeneous backends. It must instead promise a correct safe fallback, expose why a fast path is unavailable, and make the time--memory trade visible through plans and telemetry.
+
+\subsection{Public execution contract}
+
+A production API shall expose a preflight result before execution:
+\[
+  \operatorname{preflight}(M,R,\mathcal H,\Pi)
+  \longrightarrow
+  (\texttt{accepted}, P, B, E),
+\]
+where $R$ is the finite request envelope, $\Pi$ is policy, $P$ is an immutable execution plan, $B$ is a vector of reserved capacities by tier and subsystem, and $E$ is either empty or a structured rejection. The plan records the supported-operator proof obligation, tile shapes, maximum workspaces, number of in-flight buffers, spill bounds, numerical mode, fallback chain, and hardware fingerprint. Execution must not silently exceed $B$ or change numerical mode. An adaptive replan is a new transaction accepted only at a safe point.

@@ -1,0 +1,120 @@
+\section{Audit of the Motivating PyTorch Prototype}
+\label{app:prototype-audit}
+
+The motivating code communicates the idea of moving weight slices on demand, but several statements are stronger than the implementation. This appendix converts each issue into a concrete requirement.
+
+\begin{longtable}{@{}p{0.23\textwidth}p{0.31\textwidth}p{0.38\textwidth}@{}}
+\caption{Prototype issue and production correction.}\label{tab:prototype-audit}\\
+\toprule
+Prototype choice & Why it does not establish the invariant & Required correction \\
+\midrule
+\endfirsthead
+\toprule
+Prototype choice & Why it does not establish the invariant & Required correction \\
+\midrule
+\endhead
+Output-row chunks only & No sweep over the reduction axis; one row can exceed the budget. The result slices are assignments, not accumulated partial products. & Tile both output and reduction dimensions; use a bounded accumulator and apply bias once. \\
+\addlinespace
+Full \code{output\_flat} on device & Output may exceed device memory, especially for prefill or a large vocabulary. & Tile batch/token and output axes; commit completed output tiles to a virtual tensor or online consumer. \\
+\addlinespace
+Input assumed on device & Activations can exceed device memory and multiple live tensors/KV compete with them. & Make inputs virtual; materialize bounded activation tiles and model liveness across operators. \\
+\addlinespace
+Entire model \code{pin\_memory()} & Page-locked memory is scarce and pinning all weights can exceed host limits or harm the OS. & Store checkpoint in mmap/files; use a bounded pinned staging ring. \\
+\addlinespace
+\code{.cuda()} & Hard-codes one backend and default device; violates hardware-agnostic behavior. & Use backend/device abstractions and an explicit CPU fallback. \\
+\addlinespace
+Fraction of \code{mem\_get\_info} & A global observation is not a reservation; races, fragmentation, caching allocators, driver state, and other processes can invalidate it. & Preallocate a bounded arena after fixed reserves; admit task resource vectors atomically. \\
+\addlinespace
+Float32 bytes per row & Ignores input/storage/accumulator dtype, quantization metadata, pack padding, bias, transfer buffers, and kernel workspace. & Use checked byte formulas from actual layouts/codecs and worst-case workspace. \\
+\addlinespace
+\code{del w\_chunk} & Asynchronous copy/kernel may still reference the buffer; a caching allocator may retain memory. & Bind buffer leases to completion events and recycle only when terminal. \\
+\addlinespace
+Nonblocking copy without pipeline & A nonblocking flag alone does not ensure overlap; source must be pinned and streams/events must be arranged. & Use bounded double/triple buffering with capability-aware copy/compute streams and lifetime events. \\
+\addlinespace
+No allocator ownership & Temporary tensors and library workspaces allocate outside any proved budget. & Kernels consume caller-provided leased buffers/workspace; fixed library allocations are reserved at preflight. \\
+\addlinespace
+No KV or workspace accounting & LLM decode often becomes KV-bound, and attention/GEMM kernels use scratch. & Virtualize KV and include all scratch/communication/context allocations in plan bounds. \\
+\addlinespace
+Frozen parameters & Implements only inference and silently prevents training. & State inference scope explicitly; add tiled backward, gradient and optimizer state for training. \\
+\addlinespace
+Missing functional import & Code does not execute as shown. & Test every published example in CI. \\
+\addlinespace
+Assumes rank-3 input and contiguous \code{view} & Real graphs have 2D, higher-rank, non-contiguous, symbolic, and empty tensors. & Normalize contractions using logical strides and shape rules; materialize bounded tiles when needed. \\
+\addlinespace
+Unqualified ``absolute OOM immunity'' & External processes, driver/library allocations, host/storage exhaustion, and unsupported ops remain possible. & State Level I--III guarantees and return structured preflight/runtime failures. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Corrected semantic reference}
+
+The following code is intentionally synchronous and CPU-oriented. It demonstrates the correct two-axis algebra and spillable output interface; it is not the production asynchronous runtime.
+
+\begin{lstlisting}[language=Python,caption={Minimal semantic 2D sweep using explicit device selection.}]
+from __future__ import annotations
+from collections.abc import Callable
+import torch
+import torch.nn.functional as F
+
+@torch.no_grad()
+def swept_linear_reference(
+    x_host: torch.Tensor,
+    weight_reader: Callable[[int, int, int, int], torch.Tensor],
+    bias_reader: Callable[[int, int], torch.Tensor] | None,
+    *,
+    out_features: int,
+    device: torch.device,
+    token_tile: int,
+    output_tile: int,
+    reduction_tile: int,
+    consume_output: Callable[[int, int, int, int, torch.Tensor], None],
+    accumulator_dtype: torch.dtype = torch.float32,
+) -> None:
+    """Compute tiles of Y = X W^T + b without materializing full W or Y.
+
+    weight_reader(i0, i1, j0, j1) returns W[i0:i1, j0:j1]
+    on host storage. consume_output commits each completed Y tile.
+    """
+    if x_host.ndim != 2:
+        raise ValueError("x_host must have shape [tokens, in_features]")
+    p, n = x_host.shape
+    if min(token_tile, output_tile, reduction_tile) <= 0:
+        raise ValueError("tile sizes must be positive")
+
+    for p0 in range(0, p, token_tile):
+        p1 = min(p, p0 + token_tile)
+        for i0 in range(0, out_features, output_tile):
+            i1 = min(out_features, i0 + output_tile)
+            acc = torch.zeros(
+                (p1 - p0, i1 - i0),
+                device=device,
+                dtype=accumulator_dtype,
+            )
+            if bias_reader is not None:
+                b = bias_reader(i0, i1).to(
+                    device=device, dtype=accumulator_dtype
+                )
+                acc.add_(b.unsqueeze(0))
+
+            for j0 in range(0, n, reduction_tile):
+                j1 = min(n, j0 + reduction_tile)
+                x_tile = x_host[p0:p1, j0:j1].to(
+                    device=device, dtype=accumulator_dtype
+                )
+                w_tile = weight_reader(i0, i1, j0, j1).to(
+                    device=device, dtype=accumulator_dtype
+                )
+                # acc += x_tile @ w_tile.T
+                acc.add_(F.linear(x_tile, w_tile, bias=None))
+
+            consume_output(p0, p1, i0, i1, acc)
+\end{lstlisting}
+
+The accumulation statement updates the bounded accumulator exactly once per reduction tile. In production, even this reference must be improved: the complete \code{x\_host} need not fit host memory; reads and copies should be asynchronous; buffers come from arenas; kernel dtype may differ from accumulator dtype; and \code{consume\_output} needs versioned commit semantics. The purpose of the code is to disambiguate the algebra, not to serve as the enterprise implementation.
+
+\subsection{Normative reference statement}
+
+Algorithm~\ref{alg:linear-sweep} and the accumulation statement
+\[
+  \code{acc.add\_(F.linear(x\_tile, w\_tile, bias=None))}
+\]
+are normative for the synchronous semantic reference. All published code examples must execute in CI.

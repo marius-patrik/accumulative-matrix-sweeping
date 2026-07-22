@@ -1,0 +1,52 @@
+\section{Introduction}
+\label{sec:introduction}
+
+The practical boundary of local large language model execution is usually described by a residency test: the model ``fits'' if its parameters and live state can be placed in accelerator memory, or perhaps in accelerator and host memory under a layer-offload policy. This description confuses a performance preference with a computability requirement. A dense linear transformation does not mathematically require its complete weight matrix to be resident in the fastest memory. It requires only that every contributing weight and input value eventually participate in the prescribed reduction. The same observation extends, with operator-specific state, to attention, normalization, embeddings, mixture-of-experts (MoE), convolutions, and recurrent or state-space blocks.
+
+The distinction is old in numerical computing and external-memory algorithms: an array may be logically present without being physically resident, and a computation may be decomposed into transfers, local kernels, and reductions. Deep-learning software nevertheless frequently exposes a coarser unit of residency. A vendor matrix-multiplication kernel internally tiles operands into registers and on-chip memory, but normally expects the complete operands to be addressable in device memory. Module offload systems may move one layer at a time, but a single layer can itself exceed the target tier. Key--value (KV) paging virtualizes one important state class, but does not by itself virtualize arbitrary parameters, activations, outputs, or workspaces. Consequently, the failure of a residency policy is often surfaced as an out-of-memory exception even though a slower external-memory evaluation exists.
+
+This paper develops \emph{Accumulative Matrix Sweeping} (\AMS) as a system-wide answer. Its core invariant is the following engineering objective.
+
+\begin{center}
+\fbox{\begin{minipage}{0.91\linewidth}
+\textbf{Core invariant.} Given a finite supported LLM, a finite request, enough accessible persistent storage for the model and spill state, and enough compute-tier memory for one minimum legal operator tile, the runtime shall be able to complete execution without requiring the full model, a full parameter tensor, or the full dynamic state to reside in faster memory. Reducing available memory may increase transfer, recomputation, and latency, but shall not invalidate the computation merely because a conventional residency plan would not fit.
+\end{minipage}}
+\end{center}
+
+The qualifiers in this statement are essential. No fixed machine can store an infinite model, and no software can reserve memory already consumed by an uncooperative process. A malformed or unsupported custom operator may not admit the required decomposition. A request with an unbounded generation horizon is not a finite computation. Storage devices and kernels may fail. The meaningful guarantee is therefore conditional, explicit, and testable: after preflight and reservation, \AMS controls its own fast-memory allocations through bounded arenas; it admits only tile plans that fit; and it has an external-memory fallback for every operator in its supported semantic set. Under those conditions, total parameter size does not appear in the fast-memory bound.
+
+\subsection{Why the supplied row-chunk prototype is insufficient}
+
+The motivating prototype copies contiguous groups of output rows of a linear weight matrix to a CUDA device, computes the corresponding output columns, writes them into a full device-resident output, and deletes the temporary tensors. It is a useful illustration of layer offload, but it does not establish the invariant above.
+
+First, it chunks only the output dimension. A single row can exceed the chosen memory budget, and no accumulation occurs across the reduction dimension. Second, it assumes the complete input and output are resident on the device. Either may dominate memory for large batches, long prefill sequences, large vocabularies, or unusual architectures. Third, it hard-codes CUDA and 32-bit storage, pins the entire model in host memory, and uses global free-memory telemetry as if it were a reservation. Fourth, asynchronous copies require bounded page-locked staging and event-managed lifetimes; deleting a Python reference is not a proof that a DMA operation has completed or that a caching allocator has released storage. Fifth, KV state, temporary kernel workspaces, dequantization buffers, allocator fragmentation, external libraries, and non-framework allocations are outside the calculation. Finally, setting \code{requires\_grad=False} makes the example inference-only.
+
+The production design replaces that implementation with a two-dimensional or higher-dimensional tile algebra, complete-state virtualization, an explicit memory broker, asynchronous task dependencies, and a backend-neutral operator registry. Appendix~\ref{app:prototype-audit} contains a line-by-line audit and corrected reference pseudocode.
+
+\subsection{Design position}
+
+\AMS is not presented as the invention of matrix tiling, paging, offloading, or online softmax. Those techniques are established. FlashAttention demonstrates exact, IO-aware attention tiling \cite{dao2022flashattention}; FlexGen co-optimizes placement across GPU, CPU, and disk \cite{sheng2023flexgen}; ZeRO-Infinity uses heterogeneous memory for large-scale training \cite{rajbhandari2021zeroinfinity}; vLLM virtualizes KV cache pages \cite{kwon2023pagedattention}; LLM in a Flash optimizes flash-resident inference \cite{alizadeh2023llmflash}; and Welder uses tile-level compiler scheduling \cite{shi2023welder}. The claimed contribution is a unified contract and implementation architecture that treats \emph{every material tensor class and every supported operator} as subject to bounded-residency execution, including a deliberately slow scalar or CPU fallback where necessary. The invariant, not any single kernel, is the organizing principle.
+
+This position has two consequences. First, performance is hierarchical. A capable device may choose a tile equal to an entire tensor and recover a conventional execution path. A constrained device may choose megabyte, kilobyte, or scalar tiles. Second, exact dense inference has an unavoidable transfer floor. If every weight may affect the answer, an exact algorithm cannot skip arbitrary unseen weights. \AMS therefore converts a capacity failure into a predictable bandwidth-bound computation; it does not promise that a hundred-billion-parameter model streamed from a slow drive will be interactive.
+
+\subsection{Contributions}
+
+The paper makes the following contributions.
+
+\begin{enumerate}
+  \item It defines a hierarchical-memory model, the \VT{} abstraction, and a stream-decomposable operator contract covering parameters, activations, outputs, KV state, gradients, optimizer state, transfer buffers, and kernel workspaces.
+  \item It states and proves a universal external-memory executability theorem for finite graphs over a supported primitive set, a bounded fast-memory corollary independent of total model size, correctness results for tiled linear maps and online attention, a scheduler progress theorem, and a dense-weight IO lower bound.
+  \item It specifies \AMS linear sweeping as a multi-axis reduction rather than row-only offload, including loop-order alternatives, spillable accumulators, quantized storage, batched and tensor-parallel variants, and backward equations.
+  \item It gives stream plans for the operator families required by transformer, MoE, convolutional, and selective state-space language models, including paged KV state and vocabulary-wide normalization and sampling.
+  \item It defines an enterprise runtime: preallocated tier arenas, resource-vector admission, leases and events, asynchronous storage-to-host-to-device pipelines, checkpoint prepacking, caching, plan selection, pressure response, telemetry, integrity checks, and crash-safe writeback.
+  \item It defines a graph compiler based on a functional tensor intermediate representation, decomposition and liveness passes, alias preservation, a custom-operator registry, dynamic-shape guards, plan caching, and framework integration.
+  \item It supplies repository structure, interfaces, schemas, algorithms, test matrices, continuous-integration gates, benchmark protocols, security controls, and acceptance criteria sufficient to direct a production implementation without relying on unspecified architectural decisions.
+\end{enumerate}
+
+\subsection{Document status and evaluation discipline}
+
+This manuscript is a specification and mathematical design, not a report of a completed experimental campaign. Numerical values reported in related-work citations belong to those cited systems. Sections~\ref{sec:verification} and Appendix~\ref{app:repository} define experiments and release gates for an \AMS implementation; they do not assert results that have not been measured. A submission based on a completed artifact should replace the protocol-only evaluation with reproducible measurements, publish hardware and software manifests, and archive the generated plans and traces.
+
+\subsection{Organization}
+
+Section~\ref{sec:scope} delimits the guarantee. Sections~\ref{sec:model} and \ref{sec:theory} give the model and formal results. Sections~\ref{sec:linear}--\ref{sec:compiler} specify the tile algebra, operator coverage, planning, runtime, and compiler. Sections~\ref{sec:inference}--\ref{sec:numerics} address inference, training, multiple devices, and numerical semantics. Sections~\ref{sec:enterprise} and \ref{sec:verification} define the production artifact and its validation. Related work and limitations appear in Sections~\ref{sec:related} and \ref{sec:limitations}; detailed proofs, algorithms, interfaces, formats, and repository requirements are collected in the appendices.

@@ -1,0 +1,122 @@
+\section{Executability, Memory Bounds, Progress, and Lower Bounds}
+\label{sec:theory}
+
+The central invariant has a simple but important theoretical foundation. Any finite tensor computation can be expanded into a finite scalar computation graph, and finite scalar operations can be evaluated with a bounded fast-memory frontier while values reside in external storage. Practical \AMS plans recover performance by operating on larger tiles and exploiting structure, but the scalar construction establishes a floor beneath all optimized paths.
+
+\subsection{External-memory executability}
+
+\begin{assumption}[Primitive interpreter]
+\label{ass:primitive}
+There is a backend that can execute every primitive scalar operation in a finite set $\mathcal P$ using at most $\mu_{\mathcal P}$ bytes of fast memory, including operand buffers, result, finite metadata, and bounded workspace. Encoded operands and results can be read from and written to a slower tier.
+\end{assumption}
+
+\begin{theorem}[Finite external-memory evaluation]
+\label{thm:external-eval}
+Let $C$ be a finite, terminating computation whose tensor operators have semantics expressible as a finite acyclic scalar circuit over $\mathcal P$, after unrolling executed finite control flow. If persistent storage holds the circuit inputs and all values selected for spill, transfers and primitives eventually complete, and the fastest tier has capacity at least $R+\mu_{\mathcal P}$ for runtime reserve $R$, then $C$ can be evaluated in finite time with a fastest-tier working set independent of the total bytes of its parameters and intermediate tensors.
+\end{theorem}
+
+\begin{proof}
+Topologically order the finite scalar circuit. For each scalar node, read its finite operands from persistent storage or a bounded cache, execute the corresponding primitive using the reserved working set, and write the result to a unique spill location. Once all consumers of a spilled value have executed, its location may be reused. At most the runtime reserve, operands of one primitive, its result, and bounded metadata are resident in the fastest tier. The number of nodes and every operation time are finite under the assumptions, so evaluation terminates. The bound depends on primitive arity and representation, not on total parameter bytes. A complete proof including dynamic finite traces appears in Appendix~\ref{app:proofs}.
+\end{proof}
+
+\begin{corollary}[Finite LLM request]
+\label{cor:llm}
+A finite supported LLM request can execute on a local hierarchy when its checkpoint and worst-case spill fit in accessible backing storage and a backend satisfies Assumption~\ref{ass:primitive}. Accelerator memory need not hold the model or any full parameter tensor.
+\end{corollary}
+
+The corollary is an existence result, not a throughput result. A scalar plan may perform many tiny reads and writes and can be unusably slow. It nevertheless establishes the fallback that turns ``does not fit in accelerator memory'' into ``has a potentially severe but finite time cost.''
+
+\subsection{Tile-level bounded residency}
+
+Let $P$ be a validated task plan, and let $\mathcal U(t)$ be the set of leases held at time $t$. The broker enforces for every tier $k$,
+\[
+  \sum_{\ell\in\mathcal U(t)} r_k(\ell) \le C_k-R_k,
+\]
+where $R_k$ is a non-leasable reserve. External library memory included in the guarantee is charged either as a fixed reserve or as a task workspace.
+
+\begin{theorem}[Managed peak-memory bound]
+\label{thm:memory-bound}
+Suppose all material allocations in tier $k$ are obtained from a broker whose arena has admitted capacity $C_k-R_k$, every task atomically acquires its declared resource vector before dispatch, and no kernel exceeds its declared workspace. Then managed use of tier $k$ is at most $C_k$ at every time. If all parameter and state tensors are virtual and plans use tiles bounded by constants determined by $C_k$, the bound is independent of total model parameter size.
+\end{theorem}
+
+\begin{proof}
+The broker invariant bounds the sum of active leases. Arena and alignment overhead are included in the lease sizes or $R_k$. Atomic acquisition prevents a task from holding a partial vector while waiting for the remainder. Since tasks access only leased buffers and kernels obey the workspace contract, no managed allocation can exceed the admitted sum. Virtual tensors map unresident regions to slower tiers, so growing total parameter bytes increases the number of tasks or transfers rather than the size of any admitted buffer.
+\end{proof}
+
+\begin{remark}
+Sampling \code{cudaMemGetInfo} or an analogous global free-memory value is useful telemetry but does not prove Theorem~\ref{thm:memory-bound}. The value can change between query and allocation; framework allocators may reserve more than tensors currently use; and non-framework allocations may be invisible to framework profilers. The theorem is implemented by ownership and admission, not observation.
+\end{remark}
+
+\subsection{Scheduler progress}
+
+The runtime task graph contains storage reads, decode/dequantize steps, transfers, kernels, reductions, and writeback. Resource waits can deadlock if tasks hold one scarce buffer while requesting another. \AMS forbids this pattern.
+
+\begin{assumption}[Eventual service]\label{ass:progress-placeholder}
+Every admitted IO, transfer, or compute task eventually completes with success or a terminal error; completion callbacks eventually run; and cancellation eventually quiesces submitted operations.
+\end{assumption}
+
+\begin{theorem}[Progress of atomic resource admission]
+\label{thm:progress}
+Let $D$ be a finite acyclic task graph. Suppose a task is submitted only after all predecessors complete and its complete resource vector is atomically available; a submitted task does not request additional mandatory resources; completed or terminally failed tasks release all leases; and Assumption~\ref{ass:progress-placeholder} holds. If at least one ready task's resource vector fits the configured capacities whenever unfinished work remains, then the scheduler reaches a terminal state without resource deadlock.
+\end{theorem}
+
+\begin{proof}
+Assume unfinished work remains. Because $D$ is finite and acyclic, some unfinished node has all unfinished predecessors absent; after completed predecessors are removed, at least one node is ready. By hypothesis, at least one ready vector fits. Atomic admission gives that task all mandatory resources, so it cannot participate in hold-and-wait. Eventual service makes it terminal, after which it releases resources and strictly reduces the number of unfinished nodes. Induction proves termination. Fair priority aging prevents starvation among repeatedly fit ready tasks. See Appendix~\ref{app:proofs} for the error and cancellation cases.
+\end{proof}
+
+\subsection{Correctness of tiled reductions}
+
+For matrices $X\in\R^{p\times n}$, $W\in\R^{m\times n}$, and $b\in\R^m$, partition row indices $P$, output indices $I$, and reduction indices $J$ into disjoint ordered blocks. Define
+\begin{equation}
+\label{eq:tiled-linear}
+  \widehat Y_{P_a,I_b}
+   = b_{I_b}
+     +\sum_c X_{P_a,J_c}W_{I_b,J_c}^{\mathsf T}.
+\end{equation}
+
+\begin{proposition}[Algebraic correctness of the matrix sweep]
+\label{prop:linear-correct}
+Over any semiring for which the selected accumulation order is defined, Equation~\eqref{eq:tiled-linear} equals the corresponding block of $XW^{\mathsf T}+\mathbf 1b^{\mathsf T}$. Completed output tiles may be written to and later read from external storage without changing the algebraic result.
+\end{proposition}
+
+\begin{proof}
+The $c$-th product contributes exactly the terms whose reduction index lies in $J_c$. The blocks form a disjoint cover of the reduction domain, so their sum contains every term exactly once. Output and batch partitioning only selects coordinates. External storage changes residency, not values.
+\end{proof}
+
+Attention uses a different associative summary. For a fixed query row and a streamed score/value block, maintain maximum $m$, normalizer $\ell$, and unnormalized weighted value $o$. If a new block has scores $s$ and values $V$, set
+\begin{align}
+  m' &= \max(m,\max s),\\
+  \ell' &= e^{m-m'}\ell + \sum_j e^{s_j-m'},\\
+  o' &= e^{m-m'}o + \sum_j e^{s_j-m'}V_j.
+\end{align}
+
+\begin{proposition}[Exact online softmax summary]
+\label{prop:online-softmax}
+In exact real arithmetic, after processing any prefix of score/value blocks, $m$ is the maximum score in the prefix, $\ell=\sum_j e^{s_j-m}$, and $o=\sum_j e^{s_j-m}V_j$. Therefore $o/\ell$ after the final block equals ordinary softmax attention.
+\end{proposition}
+
+\begin{proof}
+Induct on blocks. Rescaling the old summary by $e^{m-m'}$ expresses all previous exponentials relative to the new maximum; adding the new block establishes the invariant. The base case is the empty summary $m=-\infty$, $\ell=0$, $o=0$. This is the online normalization principle used by IO-aware exact attention algorithms \cite{milakov2018online,dao2022flashattention}.
+\end{proof}
+
+\subsection{An unavoidable dense-weight IO floor}
+
+\begin{theorem}[Adversarial read lower bound for exact dense matvec]
+\label{thm:dense-lower-bound}
+Consider exact computation of $y=Wx$ for an arbitrary dense matrix $W\in\mathbb F^{m\times n}$ over a field and an input $x$ with every coordinate nonzero. Any deterministic algorithm that has no prior information constraining $W$ and must be correct for every $W$ must inspect every matrix entry, or information sufficient to distinguish every entry's value. Thus it consumes $\Omega(mn)$ weight elements from some resident or transferred representation.
+\end{theorem}
+
+\begin{proof}
+Suppose the algorithm does not inspect information that distinguishes entry $W_{ij}$. Choose matrices $W$ and $W'$ identical in all inspected information and all entries except $W_{ij}\ne W'_{ij}$. The algorithm follows the same execution and returns the same output, but the correct $i$-th outputs differ by $(W_{ij}-W'_{ij})x_j\ne0$, a contradiction.
+\end{proof}
+
+The theorem explains the governing time--memory trade. If a dense model is not cached in a faster tier and no exact structure or compression reduces information transfer, the model representation must be consumed during each non-amortized pass. For autoregressive batch-one decode, repeatedly streaming most weights can make per-token time approximately bandwidth-bound by model bytes divided by effective storage/link bandwidth. Batching, caching, sparsity, compression, speculative methods, or keeping hot layers resident can amortize or reduce the traffic, but no scheduler eliminates the adversarial floor.
+
+\subsection{Finite-time upper bound}
+
+Let $N_{\mathrm{tile}}$ be the finite number of tasks, $s_u$ bytes transferred by task $u$, $f_u$ primitive operations, and let every used path have positive effective bandwidth $\underline B$ and every primitive backend positive throughput $\underline F$. Ignoring overlap gives the conservative bound
+\[
+  T \le \sum_{u=1}^{N_{\mathrm{tile}}}
+  \left(\lambda_u+\frac{s_u}{\underline B}+\frac{f_u}{\underline F}\right),
+\]
+which is finite. A pipelined implementation targets the maximum, rather than the sum, of storage, link, and compute stage times in steady state. The cost model in Section~\ref{sec:planning} turns this observation into plan selection.

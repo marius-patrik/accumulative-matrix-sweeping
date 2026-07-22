@@ -1,0 +1,95 @@
+\section{Training and Fine-Tuning Extension}
+\label{sec:training}
+
+Inference is the first implementation target, but the same virtual-tensor model extends to training. Training introduces gradients, saved activations, optimizer state, mutable parameter versions, and stricter transaction requirements. The time and storage costs can be enormous; nevertheless, finite external-memory evaluation remains possible under the same primitive assumptions.
+
+\subsection{Linear backward sweep}
+
+For $Y=XW^{\mathsf T}+b$ and upstream gradient $G=\partial L/\partial Y$,
+\begin{align}
+  \frac{\partial L}{\partial X} &= GW,\label{eq:dx}\\
+  \frac{\partial L}{\partial W} &= G^{\mathsf T}X,\label{eq:dw}\\
+  \frac{\partial L}{\partial b} &= \sum_{r=1}^{p}G_{r,:}.\label{eq:db}
+\end{align}
+Each is a tiled contraction or reduction. For a weight-gradient tile $(I_b,J_c)$,
+\[
+  D W_{I_b,J_c}
+  =\sum_a G_{P_a,I_b}^{\mathsf T}X_{P_a,J_c}.
+\]
+The gradient accumulator is committed only after all microbatch/token blocks are processed. $DX$ can be produced in input-coordinate tiles by sweeping output blocks. Bias gradients use a mergeable sum.
+
+\subsection{Autograd integration}
+
+The canonical training IR makes backward explicit through AOT differentiation or operator-provided rules. Every operator plugin declares:
+
+\begin{itemize}
+  \item which forward values or summaries are needed by backward;
+  \item whether they may be recomputed exactly and the RNG/state required;
+  \item backward stream plans and resource bounds;
+  \item gradient accumulation semantics and dtype;
+  \item mutation/version effects.
+\end{itemize}
+
+A compatibility path may wrap an \AMS operator in a custom PyTorch autograd function, but saved tensors must be virtual handles, not hidden device tensors. The guaranteed implementation lowers the joint forward/backward graph and plans both phases together.
+
+\subsection{Activation spill and rematerialization}
+
+Training can trade memory for IO by spilling activations and for compute by rematerializing them. Activation checkpointing \cite{chen2016sublinear}, Checkmate \cite{jain2019checkmate}, and dynamic tensor rematerialization \cite{kirisame2020dtr} provide established trade-off frameworks. \AMS incorporates both actions into the same plan space:
+
+\begin{itemize}
+  \item \code{KEEP}: retain a tile in an admitted cache;
+  \item \code{SPILL}: write a lossless virtual tile and read it in backward;
+  \item \code{REMATERIALIZE}: discard and recompute from a checkpoint frontier;
+  \item \code{HYBRID}: spill expensive or non-deterministic values and recompute cheap deterministic ones.
+\end{itemize}
+
+The planner accounts for parameter rereads during rematerialization. On storage-bound hardware, spilling a compact activation may be cheaper than replaying several weight sweeps. On compute-rich, bandwidth-limited hardware, the opposite may hold.
+
+\subsection{RNG and stochastic operators}
+
+Dropout and stochastic layers use counter-based RNG keyed by global training step, microbatch, operator instance, logical element coordinates, and recomputation epoch policy. Rematerialization reproduces the same mask without storing it. The RNG counter mapping is part of the numerical contract and checkpoint format.
+
+Data-loader randomness, augmentation state, gradient-scaler state, and optimizer schedules are checkpointed at step boundaries. Non-deterministic custom operators cannot be rematerialized under strict mode unless they save sufficient state.
+
+\subsection{Microbatch and gradient accumulation}
+
+A large logical batch is partitioned into finite microbatches. Gradients are accumulated in virtual tiles across microbatches. The optimizer step is not visible until all required gradient contributions, clipping statistics, overflow checks, and distributed reductions complete.
+
+Global norm clipping uses a streamed sum of squared gradient tiles followed by a second pass to scale/update. Mixed-precision overflow detection is a streamed logical OR over non-finite checks. Dynamic loss-scale changes are committed with the optimizer transaction.
+
+\subsection{Optimizer-state streaming}
+
+For Adam-like optimization, every parameter tile has associated first moment, second moment, optional FP32 master parameter, and step metadata. A tile update is:
+\begin{align}
+  m_t &= \beta_1m_{t-1}+(1-\beta_1)g_t,\\
+  v_t &= \beta_2v_{t-1}+(1-\beta_2)g_t^2,\\
+  \theta_t &= \theta_{t-1}-\eta\,
+  \frac{\widehat m_t}{\sqrt{\widehat v_t}+\epsilon}.
+\end{align}
+The runtime streams aligned $(\theta,m,v,g)$ tiles, computes the update on CPU or accelerator, and transactionally writes new versions. Optimizer state need never reside in full in fast memory. ZeRO and ZeRO-Infinity demonstrate the value of partitioning and heterogeneous offload for training state \cite{rajbhandari2020zero,rajbhandari2021zeroinfinity}; \AMS applies its bounded tile contract even on one local node.
+
+The optimizer plugin declares whether update order across parameter tiles is semantically observable. Ordinary independent per-element optimizers can update in any tile order after global statistics complete. Optimizers with cross-parameter coupling require a streamed global summary or explicit ordering.
+
+\subsection{Transactional step commit}
+
+Training mutates durable model state. The reference protocol is:
+
+\begin{enumerate}
+  \item assign step transaction ID $s$ and retain parameter version $s-1$;
+  \item compute and durably stage gradient tiles or ensure they are reproducible;
+  \item compute global reductions such as norm and overflow status;
+  \item produce new optimizer and parameter tiles into version-$s$ regions with checksums;
+  \item write a manifest delta listing all new tile versions and complete training state;
+  \item atomically publish the step-$s$ root manifest;
+  \item reclaim old versions according to retention policy.
+\end{enumerate}
+
+A crash before publication leaves step $s-1$ authoritative. The journal permits cleanup or completion of orphaned writes. Checkpoint consolidation into ordinary framework formats is a separate streaming export operation.
+
+\subsection{Distributed training composition}
+
+When multiple devices or nodes are available, parameters, gradients, optimizer state, activation tiles, and data batches may be sharded. FSDP and ZeRO reduce redundancy across workers \cite{zhao2023fsdp,rajbhandari2020zero}. \AMS treats remote shards and collectives as additional placements/tasks while preserving a local external-storage fallback. The distributed planner includes communication buffers and collective workspaces in resource vectors.
+
+\subsection{Training-specific limitations}
+
+A finite training step is externally evaluable, but a full open-ended training run is not finite without a step bound. Storage endurance, checkpoint write volume, and optimizer traffic may dominate. Exact reproducibility across different tile reductions may require slower deterministic modes. Consequently, the first enterprise release should make inference generally available and mark training operator coverage explicitly, rather than claim universal training before backward and transaction conformance are complete.
