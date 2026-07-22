@@ -115,9 +115,12 @@ The reconstruction branch currently contains:
   can publish identity and ternary layouts together under one policy hash, conversion journal,
   schema-valid manifest, and atomic package root;
 - a scalar source-order FP32 linear oracle that streams weights and emits one output at a time.
+- a direct ternary linear oracle that reads and validates one encoded group, decodes one bounded group,
+  accumulates a bounded output-row tile, and matches source-order multiplication over the trusted full
+  decoder without reconstructing the parameter matrix.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, and runs 69 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
+Draft 2020-12, and runs 74 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
 accumulator remains within that arena. This proves only the Phase 0 reference behavior; Python

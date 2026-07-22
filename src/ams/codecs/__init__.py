@@ -3,6 +3,7 @@
 from ams.codecs.ternary import (
     TernaryCodecConfig,
     TernaryEncodingResult,
+    decode_ternary_group_reference,
     decode_ternary_reference,
     encode_ternary_stream,
 )
@@ -10,6 +11,7 @@ from ams.codecs.ternary import (
 __all__ = [
     "TernaryCodecConfig",
     "TernaryEncodingResult",
+    "decode_ternary_group_reference",
     "decode_ternary_reference",
     "encode_ternary_stream",
 ]

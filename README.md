@@ -57,7 +57,8 @@ publishes schema-valid AMS manifests last, and implements a deterministic groupe
 codec with crash-recoverable transformed chunks. An explicit mixed policy can retain sensitive tensors
 exactly while ternarizing selected tensors in the same journaled, schema-valid package. It is not yet a
 GLM inference engine or an OpenAI-compatible server, and the ternary codec is not a default quality
-policy.
+policy. The CPU semantic oracle can multiply directly from grouped ternary storage with bounded
+encoded-group, decoded-group, and output-row tiles; it never reconstructs the matrix in full.
 
 See [`docs/RECONSTRUCTION.md`](docs/RECONSTRUCTION.md) for source authority, hardware and model
 targets, implementation gates, integration boundaries, and current evidence.

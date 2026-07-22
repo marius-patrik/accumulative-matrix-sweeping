@@ -72,19 +72,20 @@ class TernaryCodecConfig:
         }
         return "sha256:" + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 
+    def group_record_size(self, element_count: int) -> int:
+        checked_positive(element_count, name="ternary.group_element_count")
+        if element_count > self.group_size:
+            raise AmsError(ErrorCode.PLAN_INVALID, "ternary group exceeds configured group size")
+        return _SCALE_BYTES + (element_count + _TRITS_PER_BYTE - 1) // _TRITS_PER_BYTE
+
     def encoded_size(self, element_count: int) -> int:
         checked_positive(element_count, name="ternary.element_count")
         groups = (element_count - 1) // self.group_size + 1
-        full_payload = (self.group_size + _TRITS_PER_BYTE - 1) // _TRITS_PER_BYTE
+        full_record = self.group_record_size(self.group_size)
         tail = element_count if groups == 1 else element_count - (groups - 1) * self.group_size
-        tail_payload = (tail + _TRITS_PER_BYTE - 1) // _TRITS_PER_BYTE
         return checked_add(
-            checked_mul(groups, _SCALE_BYTES, name="ternary.scale_bytes"),
-            checked_add(
-                checked_mul(max(groups - 1, 0), full_payload, name="ternary.full_payload"),
-                tail_payload,
-                name="ternary.payload_bytes",
-            ),
+            checked_mul(max(groups - 1, 0), full_record, name="ternary.full_records"),
+            self.group_record_size(tail),
             name="ternary.encoded_bytes",
         )
 
@@ -254,20 +255,36 @@ def decode_ternary_reference(
     remaining = element_count
     while remaining:
         count = min(config.group_size, remaining)
-        scale = struct.unpack_from("<f", payload, cursor)[0]
-        cursor += _SCALE_BYTES
+        record_size = config.group_record_size(count)
+        output.extend(decode_ternary_group_reference(payload[cursor : cursor + record_size], count))
+        cursor += record_size
+        remaining -= count
+    if cursor != len(payload) or len(output) != element_count:
+        raise AmsError(ErrorCode.INTERNAL_INVARIANT, "ternary decoder length mismatch")
+    return output
+
+
+def decode_ternary_group_reference(payload, element_count: int) -> list[float]:
+    """Validate and decode one complete v1 group record."""
+    checked_positive(element_count, name="ternary.group_element_count")
+    expected_size = _SCALE_BYTES + (element_count + _TRITS_PER_BYTE - 1) // _TRITS_PER_BYTE
+    view = memoryview(payload).cast("B")
+    try:
+        if view.nbytes != expected_size:
+            raise AmsError(ErrorCode.INVALID_PACKAGE, "ternary group record length is invalid")
+        scale = struct.unpack_from("<f", view, 0)[0]
         if not math.isfinite(scale) or scale < 0:
             raise AmsError(ErrorCode.NUMERIC_FAILURE, "ternary scale is invalid")
-        packed_bytes = (count + _TRITS_PER_BYTE - 1) // _TRITS_PER_BYTE
+        output: list[float] = []
+        packed_bytes = expected_size - _SCALE_BYTES
         for packed_index in range(packed_bytes):
-            packed = payload[cursor]
-            cursor += 1
+            packed = view[_SCALE_BYTES + packed_index]
             if packed > 242:
                 raise AmsError(ErrorCode.INVALID_PACKAGE, "ternary packed byte exceeds 242")
             for slot in range(_TRITS_PER_BYTE):
                 digit = (packed // _TRIT_POWERS[slot]) % 3
                 element_index = packed_index * _TRITS_PER_BYTE + slot
-                if element_index >= count:
+                if element_index >= element_count:
                     if digit != 1:
                         raise AmsError(
                             ErrorCode.INVALID_PACKAGE,
@@ -275,10 +292,9 @@ def decode_ternary_reference(
                         )
                     continue
                 output.append(-scale if digit == 0 else 0.0 if digit == 1 else scale)
-        remaining -= count
-    if cursor != len(payload) or len(output) != element_count:
-        raise AmsError(ErrorCode.INTERNAL_INVARIANT, "ternary decoder length mismatch")
-    return output
+        return output
+    finally:
+        view.release()
 
 
 def encode_ternary_bytes_for_test(
