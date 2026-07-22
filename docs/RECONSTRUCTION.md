@@ -244,6 +244,11 @@ The reconstruction branch currently contains:
   after the current K/V row has been staged, and successful retry at that same token position. A row is
   committed and caller output becomes visible only after the whole layer succeeds; the late-failure
   case preserves both the prior cache prefix and the caller's output sentinel.
+- a complete native sparse-MLP GLM-4-MoE-Lite decoder-layer token path with the same transactional MLA,
+  full-attention, output-projection, and residual prefix followed by correction-biased noaux_tc routing,
+  selected routed experts, and the shared expert. Its exact 704-byte miniature fixture rejects an
+  incomplete expert binding before any weight read, proves a selected-expert numeric failure leaves the
+  staged K/V row and caller output unpublished, and then retries the same token successfully.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal
@@ -277,7 +282,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 173 Python tests, and runs 47 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 173 Python tests, and runs 49 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

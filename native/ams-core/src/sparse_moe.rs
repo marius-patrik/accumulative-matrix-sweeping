@@ -139,6 +139,38 @@ impl SparseMoePlan {
     pub const fn scratch(&self) -> SparseMoeScratchRequirements {
         self.scratch
     }
+
+    /// Logical hidden width consumed and produced by the routed-plus-shared MLP.
+    #[must_use]
+    pub const fn hidden_elements(&self) -> usize {
+        self.hidden_elements
+    }
+
+    /// Number of routed experts whose plans and readers must be bound.
+    #[must_use]
+    pub const fn expert_count(&self) -> usize {
+        self.router.expert_count()
+    }
+
+    fn inventory_admits(&self, bindings: &SparseMoeBindings<'_, '_>) -> bool {
+        bindings.expert_plans.len() == self.router.expert_count()
+            && bindings.expert_readers.len() == self.router.expert_count()
+            && bindings
+                .expert_plans
+                .iter()
+                .all(|expert| binding_is_admitted(self, expert))
+    }
+
+    pub(crate) fn bindings_admit(&self, bindings: &SparseMoeBindings<'_, '_>) -> bool {
+        self.inventory_admits(bindings)
+            && self.router_linear.reader_end() <= bindings.router.len()
+            && self.shared.readers_admit(bindings.shared_readers)
+            && bindings
+                .expert_plans
+                .iter()
+                .zip(bindings.expert_readers)
+                .all(|(expert, readers)| expert.readers_admit(readers))
+    }
 }
 
 /// Caller-owned scratch regions and high-water for one sparse-MoE token.
@@ -223,6 +255,18 @@ impl<'a> SparseMoeScratch<'a> {
             accumulator,
         }
     }
+
+    pub(crate) const fn admits(&self, plan: &SparseMoePlan) -> bool {
+        let requirement = plan.scratch;
+        let hidden_buffer = requirement.expert_buffer_elements / 2;
+        self.mlp.admits(requirement.mlp)
+            && self.routing.admits(plan.router)
+            && self.router_logits.len() >= requirement.router_logits_elements
+            && self.expert_indices.len() >= requirement.selected_expert_elements
+            && self.expert_weights.len() >= requirement.selected_expert_elements
+            && self.expert_output.len() >= hidden_buffer
+            && self.accumulator.len() >= hidden_buffer
+    }
 }
 
 const fn binding_is_admitted(plan: &SparseMoePlan, expert: &GatedMlpPlan) -> bool {
@@ -265,28 +309,21 @@ pub fn glm_sparse_moe(
             "sparse MoE input or correction bias is non-finite",
         ));
     }
-    if bindings.expert_plans.len() != plan.router.expert_count()
-        || bindings.expert_readers.len() != plan.router.expert_count()
-        || bindings
-            .expert_plans
-            .iter()
-            .any(|expert| !binding_is_admitted(plan, expert))
-    {
+    if !plan.inventory_admits(bindings) {
         return Err(AmsError::new(
             ErrorCode::PlanInvalid,
             "sparse MoE execution bindings differ from the admitted inventory",
         ));
     }
+    if !plan.bindings_admit(bindings) {
+        return Err(AmsError::new(
+            ErrorCode::IoFailure,
+            "sparse MoE execution binding range exceeds its storage object",
+        ));
+    }
     let requirement = plan.scratch;
     let hidden_buffer = requirement.expert_buffer_elements / 2;
-    if !scratch.mlp.admits(requirement.mlp)
-        || !scratch.routing.admits(plan.router)
-        || scratch.router_logits.len() < requirement.router_logits_elements
-        || scratch.expert_indices.len() < requirement.selected_expert_elements
-        || scratch.expert_weights.len() < requirement.selected_expert_elements
-        || scratch.expert_output.len() < hidden_buffer
-        || scratch.accumulator.len() < hidden_buffer
-    {
+    if !scratch.admits(plan) {
         return Err(AmsError::new(
             ErrorCode::PreflightNoWorkingSet,
             "sparse MoE scratch is smaller than the admitted plan",

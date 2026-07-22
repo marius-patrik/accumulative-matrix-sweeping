@@ -82,6 +82,9 @@ without advancing its visible prefix, then publish it only after the layer succe
 native dense GLM-4 decoder-layer path composes both RMSNorms, MLA, staged causal attention, output
 projection, residuals, and gated MLP transactionally; a late failure leaves both cache and caller output
 unchanged so the token position can be retried.
+The corresponding sparse GLM-4 layer replaces the dense tail with bounded noaux_tc routing, one
+selected-expert working set, and the shared expert. It admits the complete reader inventory before the
+first weight read and publishes neither the staged K/V row nor caller output when a late expert fails.
 An experimental dependency-free localhost adapter now normalizes Froq-shaped Responses and Chat
 Completions requests into one typed model contract and emits byte-exact text, reasoning, tool-call,
 usage, error, and SSE terminal frames. It is deliberately backend-injected: no fixture response is

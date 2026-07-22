@@ -404,7 +404,7 @@ impl<'a> Glm4MlaScratch<'a> {
     }
 }
 
-fn readers_admit(plan: &Glm4MlaPlan, readers: &Glm4MlaReaders<'_>) -> bool {
+pub fn readers_admit(plan: &Glm4MlaPlan, readers: &Glm4MlaReaders<'_>) -> bool {
     [
         (readers.q_a, plan.q_a.reader_end()),
         (readers.q_norm, plan.q_norm_end),
