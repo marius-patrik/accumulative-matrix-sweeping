@@ -27,7 +27,9 @@ projected from parameter counts.
 | Missing AMS gitlink | `813d55ad985dc9d17daae08957d0853b569278bd` | Referenced by recovered PAES but absent from available Git objects. It must not be synthesized or misrepresented as recovered history. |
 | Froq personal fork | `rebrand/grok-to-froq` at `b6432a592b3872ca727321c75577d9f0f81e0371` | User-owned worktree with a large uncommitted xai-to-froq rename. Read-only until that work is committed or otherwise isolated. |
 | Froq upstream | `xai-org/grok-build` `main` at `a5727c5960452e7527a154b25cb5bf00cda0545e` | Model-agnostic harness reference. It is one commit ahead and two commits behind the current fork ancestry at this status date. |
+| GLM-4.7-Flash model | `zai-org/GLM-4.7-Flash` at `7dd20894a642a0aa287e9827cb1a1f7f91386b67` | Official config, generation config, tokenizer metadata/template, README, and safetensors index are pinned locally. The config and index SHA-256 digests are `dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb` and `91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791`. No weight shard has been downloaded. |
 | GLM-5.2 model | `zai-org/GLM-5.2` at `b4734de4facf877f85769a911abafc5283eab3d9` | Official config, tokenizer metadata/template, license, README, and safetensors index are pinned locally. No weight shard has been downloaded. |
+| GLM-4-MoE-Lite reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, generated/modular model, tests, and documentation used to pin MLA, interleaved RoPE, sigmoid/noaux_tc routing, dense/sparse scheduling, and base-model treatment of MTP weights. |
 | GLM-MoE-DSA reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, model, tests, and documentation used to derive execution order and compatibility risks. |
 
 Remote refs were fetched with pruning on the status date. No merge, reset, checkout, push, or remote
@@ -131,6 +133,11 @@ The reconstruction branch currently contains:
   282 shards and 1,506,659,919,872 declared BF16 tensor bytes. The config and index SHA-256 digests are
   `185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a` and
   `5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e`.
+- a separate fail-closed GLM-4-MoE-Lite architecture and checkpoint boundary. Its generated 9,703-name
+  inventory exactly matches the pinned GLM-4.7-Flash index: one dense inference layer, 46 sparse
+  inference layers, and a separately marked 212-tensor MTP layer, including its private embedding and
+  shared head. The 48-shard provider mapping declares 31,221,488,576 as `total_size`; the pinned name
+  set has SHA-256 `23321d795f0b797ab951613b86cf4d02008e4057b446055fcc2b0265b1f3db3d`.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, interleaved MLA RoPE, half-split indexer RoPE, causal DSA top-k with key-index tie breaking,
   and sigmoid/noaux_tc grouped expert routing. Correction bias affects expert choice but not mixture
@@ -170,7 +177,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 106 Python tests, and runs 27 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 121 Python tests, and runs 27 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
@@ -211,6 +218,13 @@ non-overlapping coverage of the remaining data buffer. See the
   local `/v1` base URL once the server exists.
 - Quality and throughput thresholds remain unset until GLM-4.7-Flash produces a reproducible baseline.
   Correctness, bounded residency, and protocol semantics are hard gates regardless of speed.
+- The pinned GLM-4.7-Flash index declares `total_size = 31,221,488,576`, but the immutable Hub revision
+  reports 62,444,175,504 bytes across its 48 safetensors objects. Twice the declaration is
+  62,442,977,152 bytes, leaving 1,198,352 bytes for safetensors headers and file overhead. This strongly
+  indicates that the provider wrote a BF16 element count where the generic index contract expects tensor
+  bytes. AMS records the anomaly but does not waive byte reconciliation: the current catalog builder
+  will reject it until downloaded shard headers independently prove every tensor range and an explicit,
+  model-scoped normalization is reviewed.
 - Transformers 5.12.0 skips several GLM-MoE-DSA equivalence paths because hard DSA top-k can change
   under small numerical or batching differences, and its assisted/static-cache tests are disabled for
   index-mask incompatibilities. AMS must establish its own deterministic index-ranking, cache, and MTP

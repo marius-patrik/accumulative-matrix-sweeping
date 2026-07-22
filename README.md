@@ -76,7 +76,10 @@ The pinned GLM-5.2 config and Hugging Face index also pass an exact,
 fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
 expert tensor. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal
 top-k/tie behavior, stable activations, and noaux_tc expert routing; model weight shards have not been
-downloaded. A batch-one miniature prefill composes those operators through dense and sparse layers,
+downloaded. The separately pinned GLM-4.7-Flash bring-up model now passes its own exact 9,703-name
+GLM-4-MoE-Lite inventory, including 47 inference layers and a distinct MTP layer; its anomalous
+provider `total_size` remains fail-closed pending shard-header reconciliation. A batch-one miniature
+prefill composes those operators through dense and sparse layers,
 IndexShare, routed and shared experts, residuals, and logits while proving that an unselected expert is
 never fetched. The same forward pass now runs from a published 69-tensor AMS package with three selected
 expert matrices stored as trit5 ternary; bounded range execution exactly matches the trusted full

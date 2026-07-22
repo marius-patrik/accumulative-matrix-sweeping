@@ -1,5 +1,14 @@
 """Strict normalization boundaries for external model formats."""
 
+from ams.integrations.glm4_moe_lite import (
+    Glm4MoeLiteArchitecture,
+    Glm4MoeLiteTensorInventory,
+    Glm4MoeLiteTensorRole,
+    Glm4MoeLiteTensorSlot,
+    expected_glm4_moe_lite_tensor_slots,
+    parse_glm4_moe_lite_architecture,
+    validate_glm4_moe_lite_tensor_inventory,
+)
 from ams.integrations.glm_moe_dsa import (
     GlmMoeDsaArchitecture,
     GlmTensorInventory,
@@ -35,6 +44,10 @@ from ams.integrations.safetensors import (
 )
 
 __all__ = [
+    "Glm4MoeLiteArchitecture",
+    "Glm4MoeLiteTensorInventory",
+    "Glm4MoeLiteTensorRole",
+    "Glm4MoeLiteTensorSlot",
     "GlmMoeDsaArchitecture",
     "GlmTensorInventory",
     "GlmTensorRole",
@@ -57,9 +70,12 @@ __all__ = [
     "build_huggingface_catalog",
     "build_huggingface_identity_plan",
     "build_huggingface_mixed_plan",
+    "expected_glm4_moe_lite_tensor_slots",
     "expected_glm_tensor_slots",
+    "parse_glm4_moe_lite_architecture",
     "parse_glm_moe_dsa_architecture",
     "parse_huggingface_shard_index",
     "parse_safetensors_header",
+    "validate_glm4_moe_lite_tensor_inventory",
     "validate_glm_tensor_inventory",
 ]
