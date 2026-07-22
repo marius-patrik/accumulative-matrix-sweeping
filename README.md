@@ -58,7 +58,15 @@ codec with crash-recoverable transformed chunks. An explicit mixed policy can re
 exactly while ternarizing selected tensors in the same journaled, schema-valid package. It is not yet a
 GLM inference engine or an OpenAI-compatible server, and the ternary codec is not a default quality
 policy. The CPU semantic oracle can multiply directly from grouped ternary storage with bounded
-encoded-group, decoded-group, and output-row tiles; it never reconstructs the matrix in full.
+encoded-group, decoded-group, and output-row tiles; it never reconstructs the matrix in full. A
+dependency-free Rust native core now implements the same codec and direct linear path using exclusively
+caller-owned scratch buffers.
+
+Run the current Windows verification gate with:
+
+```powershell
+./ci/verify.ps1
+```
 
 See [`docs/RECONSTRUCTION.md`](docs/RECONSTRUCTION.md) for source authority, hardware and model
 targets, implementation gates, integration boundaries, and current evidence.

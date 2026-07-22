@@ -1,0 +1,12 @@
+[workspace]
+members = ["native/ams-core"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"

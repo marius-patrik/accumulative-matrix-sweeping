@@ -1,0 +1,23 @@
+[package]
+name = "ams-core"
+version = "0.1.0-dev.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Allocation-bounded native core for Accumulative Matrix Sweeping"
+publish = false
+
+[lib]
+name = "ams_core"
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

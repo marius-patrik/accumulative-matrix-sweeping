@@ -114,13 +114,18 @@ The reconstruction branch currently contains:
 - an explicit mixed-policy planner that requires exactly one assignment for every source tensor and
   can publish identity and ternary layouts together under one policy hash, conversion journal,
   schema-valid manifest, and atomic package root;
-- a scalar source-order FP32 linear oracle that streams weights and emits one output at a time.
+- a scalar source-order FP32 linear oracle that streams weights and emits one output at a time;
 - a direct ternary linear oracle that reads and validates one encoded group, decodes one bounded group,
   accumulates a bounded output-row tile, and matches source-order multiplication over the trusted full
   decoder without reconstructing the parameter matrix.
+- a dependency-free, `unsafe`-forbidden Rust core with the complete normative error-code spellings,
+  checked in-memory and nonsymlink regular-file positional reads, ternary group decode, arena preflight,
+  and direct ternary linear execution using caller-owned encoded, decoded, and FP64 accumulator scratch;
+  native format/check/test/strict-Clippy gates pass on the Windows MSVC toolchain.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, and runs 74 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
+Draft 2020-12, runs 74 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
+streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
 accumulator remains within that arena. This proves only the Phase 0 reference behavior; Python
@@ -140,10 +145,14 @@ non-overlapping coverage of the remaining data buffer. See the
 
 - The repository has no license file. A license must be selected by the owner before distributing a
   runtime package; model licenses remain separately recorded in package provenance.
-- The production native control/data plane language remains open. The reference contracts are Python;
-  fixed-arena CPU/CUDA ownership should move to modern C++ or Rust plus CUDA after the storage proof.
+- Rust is the selected native control/data-plane language; Python remains the semantic oracle and
+  conversion surface. CUDA kernels will bind through a narrow native boundary after the CPU storage and
+  operator contracts are stable.
 - Native Windows versus WSL2/Linux packaging is not yet fixed. Contracts and tests remain portable;
   the first CUDA toolchain spike will measure both viable paths before committing the release matrix.
+- The host has an up-to-date Rust MSVC toolchain and Visual Studio 2022 Build Tools with bundled
+  CMake/Ninja, but no installed CUDA Toolkit or `nvcc`. CUDA code is therefore not yet buildable; the
+  NVIDIA driver alone is not treated as evidence of a CUDA development environment.
 - Froq configuration is intentionally deferred while its 2,811-entry uncommitted rebrand is in
   progress. The target configuration uses a custom provider with `api_backend = "responses"` and a
   local `/v1` base URL once the server exists.
