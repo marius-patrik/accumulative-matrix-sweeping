@@ -176,6 +176,13 @@ The reconstruction branch currently contains:
   shard, or tensor records fail instead of manufacturing completion. A differential integration case
   proves that eager and progressive paths yield identical verified catalogs, plans, journals,
   manifests, and manifest-last published packages.
+- an opt-in grouped symmetric INT4 v1 semantic codec. Each group stores one FP32 scale and two signed
+  low-nibble-first values per byte; values are restricted to `[-7, 7]`, the `-8` code is rejected,
+  tail padding must be canonical zero, and rounding is half away from zero against the stored scale.
+  FP16, BF16, and FP32 sources produce the same reviewed encoding, source reads are group-bounded, and
+  checksum, non-finite, reserved-code, and padding failures are pinned. This is not yet a production
+  storage layout: publication records, manifests, package readers, native direct linear execution,
+  and quality qualification remain required before any GLM tensor may use it.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -256,7 +263,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 150 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 157 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
