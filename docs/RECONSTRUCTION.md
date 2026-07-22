@@ -111,10 +111,13 @@ The reconstruction branch currently contains:
   five trits per byte, FP32 group scales, canonical tail padding, bounded source-group reads, and a
   pending-record protocol that recovers the post-transform/pre-journal crash window without rereading
   the source tensor;
+- an explicit mixed-policy planner that requires exactly one assignment for every source tensor and
+  can publish identity and ternary layouts together under one policy hash, conversion journal,
+  schema-valid manifest, and atomic package root;
 - a scalar source-order FP32 linear oracle that streams weights and emits one output at a time.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, and runs 65 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
+Draft 2020-12, and runs 69 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
 accumulator remains within that arena. This proves only the Phase 0 reference behavior; Python

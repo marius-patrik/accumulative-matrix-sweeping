@@ -11,6 +11,7 @@ from typing import Any
 
 from ams.canonical import canonical_json_bytes
 from ams.checked import checked_positive
+from ams.codecs import TernaryCodecConfig
 from ams.descriptors import (
     DType,
     JournalEntryState,
@@ -20,7 +21,13 @@ from ams.descriptors import (
     validate_semver,
 )
 from ams.errors import AmsError, ErrorCode
-from ams.integrations.huggingface import HuggingFaceCatalog, HuggingFaceIdentityPlan
+from ams.integrations.huggingface import (
+    HuggingFaceCatalog,
+    HuggingFaceCatalogTensor,
+    HuggingFaceIdentityPlan,
+    HuggingFaceMixedPlan,
+    HuggingFaceTensorEncoding,
+)
 from ams.storage import FileRangeStore, hash_reader_range
 
 _MANIFEST_NAME = "manifest.json"
@@ -105,44 +112,40 @@ def verify_manifest_content_root(manifest: dict[str, Any]) -> None:
         raise AmsError(ErrorCode.INTEGRITY_FAILURE, "AMS manifest content root mismatch")
 
 
-def build_huggingface_identity_manifest(
+@dataclass(frozen=True, slots=True)
+class _PublishedManifestTensor:
+    tensor: HuggingFaceCatalogTensor
+    tensor_id: str
+    target_hash: str
+    encoded_bytes: int
+    encoding: HuggingFaceTensorEncoding
+    ternary_config: TernaryCodecConfig | None = None
+
+
+def _journal_entries(conversion, journal) -> dict[str, Any]:
+    if (
+        journal.source_root != conversion.source_root
+        or journal.configuration_hash != conversion.configuration_hash
+    ):
+        raise AmsError(ErrorCode.PLAN_INVALID, "conversion journal does not match the plan")
+    entries = {entry.target_chunk_id: entry for entry in journal.entries}
+    if len(entries) != len(journal.entries):
+        raise AmsError(ErrorCode.INVALID_PACKAGE, "conversion journal chunk IDs are duplicated")
+    expected_ids = {item.target_chunk_id for item in conversion.items}
+    if set(entries) != expected_ids:
+        raise AmsError(ErrorCode.PLAN_INVALID, "conversion journal chunk set differs from the plan")
+    return entries
+
+
+def _identity_manifest_tensors(
     catalog: HuggingFaceCatalog,
     plan: HuggingFaceIdentityPlan,
     journal,
-    graph: GraphArtifact,
-    *,
-    architecture: str,
-    model_configuration: dict[str, Any],
-    default_dtype: DType,
-    licenses: tuple[str, ...] = (),
-) -> dict[str, Any]:
-    """Build a schema-shaped manifest only after every planned chunk is published."""
+) -> tuple[_PublishedManifestTensor, ...]:
     if plan.conversion.source_root != catalog.source_root:
         raise AmsError(ErrorCode.PLAN_INVALID, "catalog and conversion source roots differ")
-    if (
-        journal.source_root != plan.conversion.source_root
-        or journal.configuration_hash != plan.conversion.configuration_hash
-    ):
-        raise AmsError(ErrorCode.PLAN_INVALID, "conversion journal does not match the plan")
-    if not isinstance(architecture, str) or not 1 <= len(architecture) <= 512:
-        raise AmsError(ErrorCode.INVALID_PACKAGE, "model architecture is invalid")
-    default_dtype = DType(default_dtype)
-    normalized_configuration = json.loads(canonical_json_bytes(model_configuration))
-    if not isinstance(normalized_configuration, dict):
-        raise AmsError(ErrorCode.INVALID_PACKAGE, "model configuration must be an object")
-    for license_name in licenses:
-        if not isinstance(license_name, str) or len(license_name) > 1024:
-            raise AmsError(ErrorCode.INVALID_PACKAGE, "model license value is invalid")
-
-    entry_by_id = {entry.target_chunk_id: entry for entry in journal.entries}
-    if len(entry_by_id) != len(journal.entries):
-        raise AmsError(ErrorCode.INVALID_PACKAGE, "conversion journal chunk IDs are duplicated")
-    expected_ids = {item.target_chunk_id for item in plan.conversion.items}
-    if set(entry_by_id) != expected_ids:
-        raise AmsError(ErrorCode.PLAN_INVALID, "conversion journal chunk set differs from the plan")
-
-    storage_by_hash: dict[str, dict[str, Any]] = {}
-    tensors: list[dict[str, Any]] = []
+    entries = _journal_entries(plan.conversion, journal)
+    published: list[_PublishedManifestTensor] = []
     for planned in plan.tensors:
         tensor = planned.tensor
         if planned.target_chunk_id is None or tensor.source_length == 0 or 0 in tensor.shape:
@@ -151,7 +154,7 @@ def build_huggingface_identity_manifest(
                 "identity manifest v1 cannot encode zero-sized tensors",
                 evidence={"tensor_name": tensor.tensor_name},
             )
-        entry = entry_by_id[planned.target_chunk_id]
+        entry = entries[planned.target_chunk_id]
         if (
             entry.state is not JournalEntryState.PUBLISHED
             or entry.target_hash != planned.source_checksum
@@ -159,58 +162,179 @@ def build_huggingface_identity_manifest(
         ):
             raise AmsError(
                 ErrorCode.TRANSACTION_FAILURE,
-                "tensor chunk has not reached a verified published state",
+                "identity chunk has not reached a verified published state",
                 evidence={"tensor_name": tensor.tensor_name},
             )
-        algorithm, hexdigest = planned.source_checksum.split(":", 1)
+        published.append(
+            _PublishedManifestTensor(
+                tensor=tensor,
+                tensor_id=planned.target_chunk_id,
+                target_hash=planned.source_checksum,
+                encoded_bytes=tensor.source_length,
+                encoding=HuggingFaceTensorEncoding.IDENTITY,
+            )
+        )
+    return tuple(published)
+
+
+def _mixed_manifest_tensors(
+    catalog: HuggingFaceCatalog,
+    plan: HuggingFaceMixedPlan,
+    journal,
+) -> tuple[_PublishedManifestTensor, ...]:
+    if plan.conversion.source_root != catalog.source_root:
+        raise AmsError(ErrorCode.PLAN_INVALID, "catalog and mixed plan source roots differ")
+    entries = _journal_entries(plan.conversion, journal)
+    published: list[_PublishedManifestTensor] = []
+    for planned in plan.tensors:
+        entry = entries[planned.target_chunk_id]
+        if (
+            entry.state is not JournalEntryState.PUBLISHED
+            or entry.target_hash is None
+            or entry.encoded_bytes is None
+        ):
+            raise AmsError(
+                ErrorCode.TRANSACTION_FAILURE,
+                "mixed chunk has not reached a verified published state",
+                evidence={"tensor_name": planned.tensor.tensor_name},
+            )
+        validate_digest(entry.target_hash, name="mixed.target_hash")
+        if planned.encoding is HuggingFaceTensorEncoding.IDENTITY and (
+            entry.target_hash != planned.source_checksum
+            or entry.encoded_bytes != planned.tensor.source_length
+        ):
+            raise AmsError(ErrorCode.INTEGRITY_FAILURE, "identity chunk changed in mixed journal")
+        if (
+            planned.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5
+            and planned.ternary_config is None
+        ):
+            raise AmsError(ErrorCode.INTERNAL_INVARIANT, "ternary mixed tensor has no codec config")
+        published.append(
+            _PublishedManifestTensor(
+                tensor=planned.tensor,
+                tensor_id=planned.target_chunk_id,
+                target_hash=entry.target_hash,
+                encoded_bytes=entry.encoded_bytes,
+                encoding=planned.encoding,
+                ternary_config=planned.ternary_config,
+            )
+        )
+    return tuple(published)
+
+
+def _ternary_codec(config: TernaryCodecConfig, decoded_bytes: int) -> dict[str, Any]:
+    return {
+        "name": "ams.ternary.trit5",
+        "version": config.version,
+        "lossless": False,
+        "max_decoded_bytes": decoded_bytes,
+        "parameters": {
+            "ams.config-hash": config.config_hash,
+            "ams.group-size": config.group_size,
+            "ams.packing": config.packing,
+            "ams.scale-dtype": config.scale_dtype.value,
+            "ams.threshold-denominator": config.threshold_denominator,
+            "ams.threshold-numerator": config.threshold_numerator,
+        },
+    }
+
+
+def _build_huggingface_manifest(
+    catalog: HuggingFaceCatalog,
+    published: tuple[_PublishedManifestTensor, ...],
+    configuration_hash: str,
+    graph: GraphArtifact,
+    *,
+    architecture: str,
+    model_configuration: dict[str, Any],
+    default_dtype: DType,
+    licenses: tuple[str, ...],
+) -> dict[str, Any]:
+    if not isinstance(architecture, str) or not 1 <= len(architecture) <= 512:
+        raise AmsError(ErrorCode.INVALID_PACKAGE, "model architecture is invalid")
+    validate_digest(configuration_hash, name="manifest.configuration_hash")
+    default_dtype = DType(default_dtype)
+    normalized_configuration = json.loads(canonical_json_bytes(model_configuration))
+    if not isinstance(normalized_configuration, dict):
+        raise AmsError(ErrorCode.INVALID_PACKAGE, "model configuration must be an object")
+    for license_name in licenses:
+        if not isinstance(license_name, str) or len(license_name) > 1024:
+            raise AmsError(ErrorCode.INVALID_PACKAGE, "model license value is invalid")
+
+    storage_by_hash: dict[str, dict[str, Any]] = {}
+    tensors: list[dict[str, Any]] = []
+    required_features = {_ROOT_FEATURE}
+    for published_tensor in published:
+        tensor = published_tensor.tensor
+        if published_tensor.encoding is HuggingFaceTensorEncoding.IDENTITY:
+            layout_id = "layout:identity.v1"
+            storage_dtype = tensor.dtype.value
+            codec = None
+            required_features.add("ams.identity-layout.v1")
+        elif published_tensor.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5:
+            if published_tensor.ternary_config is None:
+                raise AmsError(
+                    ErrorCode.INTERNAL_INVARIANT, "ternary manifest tensor has no config"
+                )
+            layout_id = "layout:ternary.trit5.v1"
+            storage_dtype = DType.CUSTOM.value
+            codec = _ternary_codec(published_tensor.ternary_config, tensor.source_length)
+            required_features.add("ams.codec.ternary.trit5.v1")
+        else:
+            raise AmsError(ErrorCode.INTERNAL_INVARIANT, "unknown manifest tensor encoding")
+        algorithm, hexdigest = published_tensor.target_hash.split(":", 1)
         object_id = f"object:{hexdigest}"
         chunk_uri = f"chunks/{algorithm}-{hexdigest}.bin"
+        existing = storage_by_hash.get(published_tensor.target_hash)
+        if existing is not None and existing["size_bytes"] != published_tensor.encoded_bytes:
+            raise AmsError(ErrorCode.INTERNAL_INVARIANT, "content hash has conflicting sizes")
         storage_by_hash.setdefault(
-            planned.source_checksum,
+            published_tensor.target_hash,
             {
                 "object_id": object_id,
                 "uri": chunk_uri,
-                "size_bytes": tensor.source_length,
+                "size_bytes": published_tensor.encoded_bytes,
                 "alignment_bytes": 1,
-                "content_hash": planned.source_checksum,
+                "content_hash": published_tensor.target_hash,
                 "immutable": True,
                 "kind": "tensor_data",
             },
         )
+        layout: dict[str, Any] = {
+            "layout_id": layout_id,
+            "layout_version": "1.0.0",
+            "complete": True,
+            "tile_shape": list(tensor.shape),
+            "alignment_bytes": 1,
+            "storage_dtype": storage_dtype,
+            "chunks": [
+                {
+                    "chunk_id": published_tensor.tensor_id,
+                    "range": {
+                        "object_id": object_id,
+                        "offset": 0,
+                        "length": published_tensor.encoded_bytes,
+                        "checksum": published_tensor.target_hash,
+                    },
+                    "logical_origin": [0] * len(tensor.shape),
+                    "logical_extent": list(tensor.shape),
+                    "encoded_bytes": published_tensor.encoded_bytes,
+                    "decoded_bytes": tensor.source_length,
+                }
+            ],
+            "extensions": {"ams.encoding": published_tensor.encoding.value},
+        }
+        if codec is not None:
+            layout["codec"] = codec
         tensors.append(
             {
-                "tensor_id": planned.target_chunk_id,
+                "tensor_id": published_tensor.tensor_id,
                 "tensor_class": "parameter",
                 "shape": list(tensor.shape),
                 "logical_dtype": tensor.dtype.value,
                 "byte_order": "little",
                 "immutable": True,
-                "layouts": [
-                    {
-                        "layout_id": "layout:identity.v1",
-                        "layout_version": "1.0.0",
-                        "complete": True,
-                        "tile_shape": list(tensor.shape),
-                        "alignment_bytes": 1,
-                        "storage_dtype": tensor.dtype.value,
-                        "chunks": [
-                            {
-                                "chunk_id": planned.target_chunk_id,
-                                "range": {
-                                    "object_id": object_id,
-                                    "offset": 0,
-                                    "length": tensor.source_length,
-                                    "checksum": planned.source_checksum,
-                                },
-                                "logical_origin": [0] * len(tensor.shape),
-                                "logical_extent": list(tensor.shape),
-                                "encoded_bytes": tensor.source_length,
-                                "decoded_bytes": tensor.source_length,
-                            }
-                        ],
-                        "extensions": {"ams.encoding": "identity"},
-                    }
-                ],
+                "layouts": [layout],
                 "extensions": {
                     "hf.shard-name": tensor.shard_name,
                     "hf.source-dtype": tensor.source_dtype,
@@ -231,13 +355,14 @@ def build_huggingface_identity_manifest(
     }
     identity = {
         "source_root": catalog.source_root,
-        "configuration_hash": plan.conversion.configuration_hash,
+        "configuration_hash": configuration_hash,
         "graph_hash": graph.content_hash,
         "architecture": architecture,
         "model_configuration": normalized_configuration,
         "tensors": [
             {
                 "tensor_id": tensor["tensor_id"],
+                "encoding": tensor["layouts"][0]["extensions"]["ams.encoding"],
                 "checksum": tensor["layouts"][0]["chunks"][0]["range"]["checksum"],
             }
             for tensor in sorted(tensors, key=lambda item: item["tensor_id"])
@@ -248,7 +373,7 @@ def build_huggingface_identity_manifest(
         "schema_id": "ams.model.manifest",
         "format_version": {"major": 1, "minor": 0},
         "package_id": package_id,
-        "required_features": [_ROOT_FEATURE, "ams.identity-layout.v1"],
+        "required_features": sorted(required_features),
         "optional_features": [],
         "graph": {
             "uri": graph.uri,
@@ -286,7 +411,7 @@ def build_huggingface_identity_manifest(
                     for source in catalog.sources
                 ],
             ],
-            "configuration_hash": plan.conversion.configuration_hash,
+            "configuration_hash": configuration_hash,
             "licenses": list(licenses),
         },
         "extensions": {
@@ -299,6 +424,54 @@ def build_huggingface_identity_manifest(
         **manifest_without_root,
         "content_root": _manifest_root(manifest_without_root),
     }
+
+
+def build_huggingface_identity_manifest(
+    catalog: HuggingFaceCatalog,
+    plan: HuggingFaceIdentityPlan,
+    journal,
+    graph: GraphArtifact,
+    *,
+    architecture: str,
+    model_configuration: dict[str, Any],
+    default_dtype: DType,
+    licenses: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Build a schema-shaped identity manifest after every chunk is published."""
+    return _build_huggingface_manifest(
+        catalog,
+        _identity_manifest_tensors(catalog, plan, journal),
+        plan.conversion.configuration_hash,
+        graph,
+        architecture=architecture,
+        model_configuration=model_configuration,
+        default_dtype=default_dtype,
+        licenses=licenses,
+    )
+
+
+def build_huggingface_mixed_manifest(
+    catalog: HuggingFaceCatalog,
+    plan: HuggingFaceMixedPlan,
+    journal,
+    graph: GraphArtifact,
+    *,
+    architecture: str,
+    model_configuration: dict[str, Any],
+    default_dtype: DType,
+    licenses: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Build one manifest containing explicit identity and ternary tensor layouts."""
+    return _build_huggingface_manifest(
+        catalog,
+        _mixed_manifest_tensors(catalog, plan, journal),
+        plan.policy_hash,
+        graph,
+        architecture=architecture,
+        model_configuration=model_configuration,
+        default_dtype=default_dtype,
+        licenses=licenses,
+    )
 
 
 def _resolve_package_file(root: Path, uri: str) -> Path:

@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from ams.canonical import canonical_json_bytes
 from ams.checked import checked_add, checked_uint
+from ams.codecs import TernaryCodecConfig
 from ams.conversion import ConversionItem, ConversionPlan
 from ams.descriptors import ByteRange, DType, validate_digest, validate_identifier
 from ams.errors import AmsError, ErrorCode
@@ -92,6 +94,42 @@ class HuggingFacePlannedTensor:
 class HuggingFaceIdentityPlan:
     conversion: ConversionPlan
     tensors: tuple[HuggingFacePlannedTensor, ...]
+
+
+class HuggingFaceTensorEncoding(StrEnum):
+    IDENTITY = "identity"
+    TERNARY_TRIT5 = "ternary_trit5"
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceTensorAssignment:
+    tensor_name: str
+    encoding: HuggingFaceTensorEncoding
+    ternary_config: TernaryCodecConfig | None = None
+
+    def __post_init__(self) -> None:
+        _validate_external_name(self.tensor_name, field="tensor name", max_bytes=4096)
+        object.__setattr__(self, "encoding", HuggingFaceTensorEncoding(self.encoding))
+        if self.encoding is HuggingFaceTensorEncoding.IDENTITY and self.ternary_config is not None:
+            raise AmsError(ErrorCode.PLAN_INVALID, "identity assignment cannot have ternary config")
+        if self.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5 and self.ternary_config is None:
+            raise AmsError(ErrorCode.PLAN_INVALID, "ternary assignment requires codec config")
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceMixedPlannedTensor:
+    tensor: HuggingFaceCatalogTensor
+    target_chunk_id: str
+    source_checksum: str
+    encoding: HuggingFaceTensorEncoding
+    ternary_config: TernaryCodecConfig | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceMixedPlan:
+    conversion: ConversionPlan
+    policy_hash: str
+    tensors: tuple[HuggingFaceMixedPlannedTensor, ...]
 
 
 class _DuplicateIndexKey(ValueError):
@@ -281,13 +319,7 @@ def build_huggingface_identity_plan(
     planned: list[HuggingFacePlannedTensor] = []
     items: list[ConversionItem] = []
     for tensor in catalog.tensors:
-        source = source_by_id[tensor.object_id]
-        checksum = hash_reader_range(
-            source.reader,
-            tensor.source_offset,
-            tensor.source_length,
-            buffer_bytes=buffer_bytes,
-        )
+        checksum = _hash_catalog_tensor(source_by_id, tensor, buffer_bytes=buffer_bytes)
         target_chunk_id = None
         if tensor.source_length > 0:
             target_chunk_id = (
@@ -319,5 +351,107 @@ def build_huggingface_identity_plan(
             configuration_hash=configuration_hash,
             items=tuple(items),
         ),
+        tensors=tuple(planned),
+    )
+
+
+def _hash_catalog_tensor(
+    source_by_id: dict[str, HuggingFaceShardSource],
+    tensor: HuggingFaceCatalogTensor,
+    *,
+    buffer_bytes: int,
+) -> str:
+    """Apply the one canonical checked range-hash rule used by all HF planners."""
+    source = source_by_id[tensor.object_id]
+    return hash_reader_range(
+        source.reader,
+        tensor.source_offset,
+        tensor.source_length,
+        buffer_bytes=buffer_bytes,
+    )
+
+
+def build_huggingface_mixed_plan(
+    catalog: HuggingFaceCatalog,
+    assignments: tuple[HuggingFaceTensorAssignment, ...],
+    *,
+    buffer_bytes: int = 1024 * 1024,
+) -> HuggingFaceMixedPlan:
+    """Build a plan only when every tensor has one explicit storage encoding."""
+    assignment_by_name = {assignment.tensor_name: assignment for assignment in assignments}
+    catalog_names = {tensor.tensor_name for tensor in catalog.tensors}
+    if len(assignment_by_name) != len(assignments) or set(assignment_by_name) != catalog_names:
+        raise AmsError(
+            ErrorCode.PLAN_INVALID,
+            "mixed policy must assign every catalog tensor exactly once",
+        )
+    source_by_id = {source.object_id: source for source in catalog.sources}
+    if len(source_by_id) != len(catalog.sources):
+        raise AmsError(ErrorCode.PLAN_INVALID, "Hugging Face source object IDs are not unique")
+    policy_payload = []
+    for tensor_name in sorted(assignment_by_name):
+        assignment = assignment_by_name[tensor_name]
+        policy_payload.append(
+            {
+                "tensor_name": tensor_name,
+                "encoding": assignment.encoding.value,
+                **(
+                    {"ternary_config_hash": assignment.ternary_config.config_hash}
+                    if assignment.ternary_config is not None
+                    else {}
+                ),
+            }
+        )
+    policy_hash = "sha256:" + hashlib.sha256(canonical_json_bytes(policy_payload)).hexdigest()
+    planned: list[HuggingFaceMixedPlannedTensor] = []
+    items: list[ConversionItem] = []
+    float_dtypes = {DType.FLOAT16, DType.BFLOAT16, DType.FLOAT32}
+    for tensor in catalog.tensors:
+        assignment = assignment_by_name[tensor.tensor_name]
+        if tensor.source_length == 0 or 0 in tensor.shape:
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "mixed package v1 cannot encode zero-sized tensors",
+            )
+        if (
+            assignment.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5
+            and tensor.dtype not in float_dtypes
+        ):
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                f"ternary assignment requires a supported float source: {tensor.tensor_name}",
+            )
+        checksum = _hash_catalog_tensor(source_by_id, tensor, buffer_bytes=buffer_bytes)
+        target_identity = {
+            "encoding": assignment.encoding.value,
+            "policy_hash": policy_hash,
+            "tensor_name": tensor.tensor_name,
+        }
+        target_chunk_id = (
+            "tensor:" + hashlib.sha256(canonical_json_bytes(target_identity)).hexdigest()
+        )
+        source_range = ByteRange(
+            object_id=tensor.object_id,
+            offset=tensor.source_offset,
+            length=tensor.source_length,
+            checksum=checksum,
+        )
+        items.append(ConversionItem(target_chunk_id, source_range))
+        planned.append(
+            HuggingFaceMixedPlannedTensor(
+                tensor=tensor,
+                target_chunk_id=target_chunk_id,
+                source_checksum=checksum,
+                encoding=assignment.encoding,
+                ternary_config=assignment.ternary_config,
+            )
+        )
+    return HuggingFaceMixedPlan(
+        conversion=ConversionPlan(
+            source_root=catalog.source_root,
+            configuration_hash=policy_hash,
+            items=tuple(items),
+        ),
+        policy_hash=policy_hash,
         tensors=tuple(planned),
     )
