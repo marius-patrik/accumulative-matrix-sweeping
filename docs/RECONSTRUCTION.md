@@ -139,9 +139,16 @@ The reconstruction branch currently contains:
   plus shared experts, residuals, final normalization, and LM-head logits. Its access-denial invariant
   proves that the deliberately unselected expert is never fetched. Stable logits and token argmaxes are
   pinned as regression anchors. MTP remains an explicit `UNSUPPORTED_OP`, never a silent no-op.
+- execution of that same miniature graph from a canonical, manifest-last, exact-inventory AMS package.
+  All 69 fixture tensors are declared; the selected routed expert's gate/up/down matrices use trit5
+  ternary and the rest use identity FP32. Direct package-range execution exactly matches a trusted
+  materialized decoder of those ternary payloads. Content objects are hash-verified lazily before first
+  use, a mutated embedding object fails with `INTEGRITY_FAILURE`, required-feature drift and partial
+  inventories fail closed, and the measured maximum verification/range buffer in the 64-byte-arena test
+  is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 95 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 99 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
@@ -155,8 +162,10 @@ evidence show that the assignment meets the declared quality threshold.
 
 The miniature GLM provider keeps complete tiny tensors in memory solely to serve as a trusted semantic
 fixture. The composed runner itself sees only vector, embedding-row, and linear operations through a
-narrow weight-access contract; the next storage integration must implement that contract from AMS
-chunks and preserve the already-tested no-unselected-expert-read invariant.
+narrow weight-access contract. The AMS package implementation of that contract preserves the
+no-unselected-expert-read invariant and bounds individual reads, but it is still a Python semantic
+oracle: its allocation overhead, filesystem page cache, and full-object verification traffic are not a
+production high-water proof. Those claims remain gated on the native implementation and trace broker.
 
 The safetensors boundary follows the official format contract: an eight-byte little-endian header
 length, bounded UTF-8 JSON metadata, relative tensor data offsets, duplicate-key rejection, and complete

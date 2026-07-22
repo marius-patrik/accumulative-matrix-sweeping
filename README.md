@@ -66,7 +66,9 @@ expert tensor. Deterministic scalar oracles now pin GLM normalization, both rota
 top-k/tie behavior, stable activations, and noaux_tc expert routing; model weight shards have not been
 downloaded. A batch-one miniature prefill composes those operators through dense and sparse layers,
 IndexShare, routed and shared experts, residuals, and logits while proving that an unselected expert is
-never fetched. Its in-memory weights are a semantic fixture, not a production residency claim.
+never fetched. The same forward pass now runs from a published 69-tensor AMS package with three selected
+expert matrices stored as trit5 ternary; bounded range execution exactly matches the trusted full
+decoder, while lazy object hashing detects tampering before first use.
 
 Run the current Windows verification gate with:
 

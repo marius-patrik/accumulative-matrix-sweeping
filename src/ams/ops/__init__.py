@@ -19,6 +19,7 @@ from ams.ops.glm_moe_dsa_model import (
     GlmWeightAccess,
     run_glm_moe_dsa_prefill_reference,
 )
+from ams.ops.glm_package_weights import GlmPackageReadEvidence, GlmPackageWeights
 from ams.ops.reference import (
     StreamedLinearPlan,
     TernaryStreamedLinearPlan,
@@ -28,6 +29,8 @@ from ams.ops.reference import (
 
 __all__ = [
     "GlmExpertRouting",
+    "GlmPackageReadEvidence",
+    "GlmPackageWeights",
     "GlmReferenceLayerTrace",
     "GlmReferenceOutput",
     "GlmReferenceTensor",

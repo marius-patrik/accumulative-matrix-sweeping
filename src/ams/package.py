@@ -474,7 +474,23 @@ def build_huggingface_mixed_manifest(
     )
 
 
-def _resolve_package_file(root: Path, uri: str) -> Path:
+def resolve_package_root(package_root: Path) -> Path:
+    """Resolve a nonsymlink package directory for publication or loading."""
+    try:
+        if package_root.is_symlink():
+            raise AmsError(ErrorCode.INVALID_PACKAGE, "package root cannot be a symlink")
+        root = package_root.resolve(strict=True)
+        if not root.is_dir():
+            raise AmsError(ErrorCode.INVALID_PACKAGE, "package root is not a directory")
+        return root
+    except AmsError:
+        raise
+    except OSError as exc:
+        raise AmsError(ErrorCode.IO_FAILURE, "package root is unavailable", retriable=True) from exc
+
+
+def resolve_package_file(root: Path, uri: str) -> Path:
+    """Resolve a declared local object without following package-internal symlinks."""
     _validate_relative_package_uri(uri, field="storage_object.uri")
     try:
         unresolved = root / Path(uri)
@@ -521,16 +537,7 @@ def publish_manifest_last(
     ):
         raise AmsError(ErrorCode.PLAN_INVALID, "manifest size limit must be positive")
     verify_manifest_content_root(manifest)
-    try:
-        if package_root.is_symlink():
-            raise AmsError(ErrorCode.INVALID_PACKAGE, "package root cannot be a symlink")
-        root = package_root.resolve(strict=True)
-        if not root.is_dir():
-            raise AmsError(ErrorCode.INVALID_PACKAGE, "package root is not a directory")
-    except AmsError:
-        raise
-    except OSError as exc:
-        raise AmsError(ErrorCode.IO_FAILURE, "package root is unavailable", retriable=True) from exc
+    root = resolve_package_root(package_root)
     storage_objects = manifest.get("storage_objects")
     if not isinstance(storage_objects, list) or not storage_objects:
         raise AmsError(ErrorCode.INVALID_PACKAGE, "manifest storage object list is invalid")
@@ -545,7 +552,7 @@ def publish_manifest_last(
             raise AmsError(ErrorCode.INVALID_PACKAGE, "storage object fields are missing") from exc
         checked_positive(size_bytes, name="storage_object.size_bytes")
         validate_digest(content_hash, name="storage_object.content_hash")
-        path = _resolve_package_file(root, uri)
+        path = resolve_package_file(root, uri)
         try:
             if path.stat().st_size != size_bytes:
                 raise AmsError(
