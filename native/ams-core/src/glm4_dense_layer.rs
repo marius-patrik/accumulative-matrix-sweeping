@@ -249,6 +249,51 @@ impl Glm4DenseLayerPlan {
     pub const fn scratch(&self) -> Glm4DenseLayerScratchRequirements {
         self.scratch
     }
+
+    /// Decoder hidden width consumed and produced by this layer.
+    #[must_use]
+    pub const fn hidden_elements(&self) -> usize {
+        self.scratch.final_output_elements
+    }
+
+    /// Exact K/V cache geometry bound to this layer.
+    #[must_use]
+    pub const fn cache_plan(&self) -> KvCachePlan {
+        self.cache
+    }
+
+    pub(crate) fn preflight(
+        &self,
+        readers: &Glm4DenseLayerReaders<'_>,
+        cache: &KvCache<'_>,
+        position: usize,
+        scratch: &Glm4DenseLayerScratch<'_>,
+    ) -> Result<(), AmsError> {
+        if cache.plan() != self.cache || position != cache.committed_tokens() {
+            return Err(AmsError::new(
+                ErrorCode::PlanInvalid,
+                "GLM-4 dense layer cache state disagrees with the plan or position",
+            ));
+        }
+        if !scratch.admits(&self.scratch) {
+            return Err(AmsError::new(
+                ErrorCode::PreflightNoWorkingSet,
+                "GLM-4 dense layer scratch is smaller than the admitted plan",
+            ));
+        }
+        if self.input_norm_end > readers.input_norm.len()
+            || self.post_norm_end > readers.post_attention_norm.len()
+            || self.output_projection.reader_end() > readers.output_projection.len()
+            || !crate::glm4_mla::readers_admit(&self.mla, &readers.mla)
+            || !self.mlp.readers_admit(&readers.mlp)
+        {
+            return Err(AmsError::new(
+                ErrorCode::IoFailure,
+                "GLM-4 dense layer weight range exceeds its storage object",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Immutable weight readers for one dense decoder layer.
@@ -386,12 +431,6 @@ pub fn glm4_dense_layer_token(
     output: &mut [f64],
 ) -> Result<(), AmsError> {
     let requirement = plan.scratch;
-    if cache.plan() != plan.cache || position != cache.committed_tokens() {
-        return Err(AmsError::new(
-            ErrorCode::PlanInvalid,
-            "GLM-4 dense layer cache state disagrees with the plan or position",
-        ));
-    }
     if hidden.len() != requirement.final_output_elements
         || output.len() != requirement.final_output_elements
     {
@@ -406,22 +445,7 @@ pub fn glm4_dense_layer_token(
             "GLM-4 dense layer hidden state is non-finite",
         ));
     }
-    if !scratch.admits(&requirement) {
-        return Err(AmsError::new(
-            ErrorCode::PreflightNoWorkingSet,
-            "GLM-4 dense layer scratch is smaller than the admitted plan",
-        ));
-    }
-    if plan.input_norm_end > readers.input_norm.len()
-        || plan.post_norm_end > readers.post_attention_norm.len()
-        || plan.output_projection.reader_end() > readers.output_projection.len()
-        || !plan.mlp.readers_admit(&readers.mlp)
-    {
-        return Err(AmsError::new(
-            ErrorCode::IoFailure,
-            "GLM-4 dense layer weight range exceeds its storage object",
-        ));
-    }
+    plan.preflight(readers, cache, position, scratch)?;
 
     let norm_weights = &mut scratch.norm_weights[..requirement.norm_weight_elements];
     read_identity_vector(

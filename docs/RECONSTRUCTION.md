@@ -255,6 +255,11 @@ The reconstruction branch currently contains:
   mixes identity, ternary, and INT4 tensors, matches independently decoded package weights exactly,
   proves the unselected expert is never fetched, and pins the manifest architecture as the sole parser
   and exact-inventory authority. This is a semantic/package proof, not native whole-model execution.
+- a native GLM-4 decoder-stack transaction composing the first dense layer and all subsequent sparse
+  layers with one reusable scratch allocation per layer class. It preflights the complete reader,
+  cache, and scratch inventory before any weight read. Its two-layer fixture proves an incomplete later
+  binding cannot start the dense layer, a late selected-expert failure rolls the already-committed dense
+  KV prefix back, caller output remains untouched, and retry advances both layer prefixes together.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal
@@ -288,7 +293,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 177 Python tests, and runs 49 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 177 Python tests, and runs 50 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

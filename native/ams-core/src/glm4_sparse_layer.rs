@@ -283,6 +283,52 @@ impl Glm4SparseLayerPlan {
     pub const fn scratch(&self) -> Glm4SparseLayerScratchRequirements {
         self.scratch
     }
+
+    /// Decoder hidden width consumed and produced by this layer.
+    #[must_use]
+    pub const fn hidden_elements(&self) -> usize {
+        self.scratch.final_output_elements
+    }
+
+    /// Exact K/V cache geometry bound to this layer.
+    #[must_use]
+    pub const fn cache_plan(&self) -> KvCachePlan {
+        self.cache
+    }
+
+    pub(crate) fn preflight(
+        &self,
+        readers: &Glm4SparseLayerReaders<'_, '_>,
+        cache: &KvCache<'_>,
+        position: usize,
+        scratch: &Glm4SparseLayerScratch<'_>,
+    ) -> Result<(), AmsError> {
+        if cache.plan() != self.cache || position != cache.committed_tokens() {
+            return Err(AmsError::new(
+                ErrorCode::PlanInvalid,
+                "GLM-4 sparse layer cache state disagrees with the plan or position",
+            ));
+        }
+        if !scratch.admits(self) {
+            return Err(AmsError::new(
+                ErrorCode::PreflightNoWorkingSet,
+                "GLM-4 sparse layer scratch is smaller than the admitted plan",
+            ));
+        }
+        if self.input_norm_end > readers.input_norm.len()
+            || self.post_attention_norm_end > readers.post_attention_norm.len()
+            || self.correction_bias_end > readers.correction_bias.len()
+            || self.output_projection.reader_end() > readers.output_projection.len()
+            || !mla_readers_admit(&self.mla, &readers.mla)
+            || !self.moe.bindings_admit(&readers.moe)
+        {
+            return Err(AmsError::new(
+                ErrorCode::IoFailure,
+                "GLM-4 sparse layer weight binding or range is incomplete",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Immutable weight readers for one sparse decoder layer.
@@ -431,12 +477,6 @@ pub fn glm4_sparse_layer_token(
     output: &mut [f64],
 ) -> Result<(), AmsError> {
     let requirement = plan.scratch;
-    if cache.plan() != plan.cache || position != cache.committed_tokens() {
-        return Err(AmsError::new(
-            ErrorCode::PlanInvalid,
-            "GLM-4 sparse layer cache state disagrees with the plan or position",
-        ));
-    }
     if hidden.len() != requirement.final_output_elements
         || output.len() != requirement.final_output_elements
     {
@@ -451,24 +491,7 @@ pub fn glm4_sparse_layer_token(
             "GLM-4 sparse layer hidden state is non-finite",
         ));
     }
-    if !scratch.admits(plan) {
-        return Err(AmsError::new(
-            ErrorCode::PreflightNoWorkingSet,
-            "GLM-4 sparse layer scratch is smaller than the admitted plan",
-        ));
-    }
-    if plan.input_norm_end > readers.input_norm.len()
-        || plan.post_attention_norm_end > readers.post_attention_norm.len()
-        || plan.correction_bias_end > readers.correction_bias.len()
-        || plan.output_projection.reader_end() > readers.output_projection.len()
-        || !mla_readers_admit(&plan.mla, &readers.mla)
-        || !plan.moe.bindings_admit(&readers.moe)
-    {
-        return Err(AmsError::new(
-            ErrorCode::IoFailure,
-            "GLM-4 sparse layer weight binding or range is incomplete",
-        ));
-    }
+    plan.preflight(readers, cache, position, scratch)?;
 
     let correction_bias = &mut scratch.correction_bias[..requirement.correction_bias_elements];
     read_identity_vector(

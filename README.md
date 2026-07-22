@@ -90,6 +90,9 @@ layer schedule, final normalization, and LM head from the same mixed package bou
 GLM-5 fixture. Its architecture field selects one exact parser and inventory; that inventory contains
 9,703 names for the pinned GLM-4.7 model. The tiny fixture proves mixed identity/ternary/INT4 execution
 and leaves MTP explicitly unsupported.
+The native decoder-stack transaction preflights the dense layer and every sparse layer before its
+first read, reuses one working set per layer class, and treats all per-layer KV prefixes as one commit:
+a later expert failure rolls earlier layer prefixes back so the same token can be retried safely.
 An experimental dependency-free localhost adapter now normalizes Froq-shaped Responses and Chat
 Completions requests into one typed model contract and emits byte-exact text, reasoning, tool-call,
 usage, error, and SSE terminal frames. It is deliberately backend-injected: no fixture response is

@@ -322,6 +322,21 @@ impl<'a> KvCache<'a> {
         Ok(())
     }
 
+    /// Hide exactly the most recently committed row during a wider graph rollback.
+    ///
+    /// Encoded bytes may remain in the unpublished tail and are overwritten by the retry.
+    pub(crate) fn rollback_last(&mut self, position: usize) -> Result<(), AmsError> {
+        let expected_committed = add(position, 1, "K/V cache rollback position overflow")?;
+        if self.committed_tokens != expected_committed {
+            return Err(AmsError::new(
+                ErrorCode::InternalInvariant,
+                "K/V cache rollback disagrees with the committed prefix",
+            ));
+        }
+        self.committed_tokens = position;
+        Ok(())
+    }
+
     /// Borrow the committed prefix plus one staged authoritative next row.
     pub(crate) fn staged_view<'view>(
         &'view self,
