@@ -134,9 +134,14 @@ The reconstruction branch currently contains:
   softmax, interleaved MLA RoPE, half-split indexer RoPE, causal DSA top-k with key-index tie breaking,
   and sigmoid/noaux_tc grouped expert routing. Correction bias affects expert choice but not mixture
   weight, matching the pinned reference order.
+- a deterministic batch-one miniature GLM-MoE-DSA prefill that composes embedding lookup, a dense
+  decoder layer with a full DSA indexer, a sparse layer reusing those indices, causal attention, routed
+  plus shared experts, residuals, final normalization, and LM-head logits. Its access-denial invariant
+  proves that the deliberately unselected expert is never fetched. Stable logits and token argmaxes are
+  pinned as regression anchors. MTP remains an explicit `UNSUPPORTED_OP`, never a silent no-op.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 91 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 95 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
@@ -147,6 +152,11 @@ The ternary implementation is a format and restart-semantics proof, not a model-
 an explicit 7/10 mean-absolute threshold and the mean magnitude of selected values as each group scale.
 No GLM tensor is assigned this encoding until a complete mixed per-tensor policy and calibration
 evidence show that the assignment meets the declared quality threshold.
+
+The miniature GLM provider keeps complete tiny tensors in memory solely to serve as a trusted semantic
+fixture. The composed runner itself sees only vector, embedding-row, and linear operations through a
+narrow weight-access contract; the next storage integration must implement that contract from AMS
+chunks and preserve the already-tested no-unselected-expert-read invariant.
 
 The safetensors boundary follows the official format contract: an eight-byte little-endian header
 length, bounded UTF-8 JSON metadata, relative tensor data offsets, duplicate-key rejection, and complete

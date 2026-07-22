@@ -11,6 +11,14 @@ from ams.ops.glm_moe_dsa import (
     silu_reference,
     softmax_reference,
 )
+from ams.ops.glm_moe_dsa_model import (
+    GlmReferenceLayerTrace,
+    GlmReferenceOutput,
+    GlmReferenceTensor,
+    GlmReferenceWeights,
+    GlmWeightAccess,
+    run_glm_moe_dsa_prefill_reference,
+)
 from ams.ops.reference import (
     StreamedLinearPlan,
     TernaryStreamedLinearPlan,
@@ -20,6 +28,11 @@ from ams.ops.reference import (
 
 __all__ = [
     "GlmExpertRouting",
+    "GlmReferenceLayerTrace",
+    "GlmReferenceOutput",
+    "GlmReferenceTensor",
+    "GlmReferenceWeights",
+    "GlmWeightAccess",
     "StreamedLinearPlan",
     "TernaryStreamedLinearPlan",
     "apply_rope_half_split_reference",
@@ -28,6 +41,7 @@ __all__ = [
     "layer_norm_reference",
     "rms_norm_reference",
     "route_glm_experts_reference",
+    "run_glm_moe_dsa_prefill_reference",
     "silu_reference",
     "softmax_reference",
     "stream_linear_f32",

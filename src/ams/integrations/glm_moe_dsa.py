@@ -224,7 +224,14 @@ def parse_glm_moe_dsa_architecture(payload: bytes) -> GlmMoeDsaArchitecture:
     qk_rope_head_dim = _positive_integer(raw, "qk_rope_head_dim")
     qk_head_dim = _positive_integer(raw, "qk_head_dim")
     index_head_dim = _positive_integer(raw, "index_head_dim")
-    if qk_head_dim != qk_nope_head_dim + qk_rope_head_dim or index_head_dim < qk_rope_head_dim:
+    num_attention_heads = _positive_integer(raw, "num_attention_heads")
+    num_key_value_heads = _positive_integer(raw, "num_key_value_heads")
+    if (
+        qk_head_dim != qk_nope_head_dim + qk_rope_head_dim
+        or qk_rope_head_dim % 2
+        or index_head_dim < qk_rope_head_dim
+        or num_attention_heads % num_key_value_heads
+    ):
         raise AmsError(ErrorCode.INVALID_PACKAGE, "GLM attention head dimensions are inconsistent")
     rope_parameters = raw["rope_parameters"]
     if (
@@ -251,8 +258,8 @@ def parse_glm_moe_dsa_architecture(payload: bytes) -> GlmMoeDsaArchitecture:
         num_experts_per_tok=num_experts_per_tok,
         n_group=n_group,
         topk_group=topk_group,
-        num_attention_heads=_positive_integer(raw, "num_attention_heads"),
-        num_key_value_heads=_positive_integer(raw, "num_key_value_heads"),
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
         q_lora_rank=_positive_integer(raw, "q_lora_rank"),
         kv_lora_rank=_positive_integer(raw, "kv_lora_rank"),
         qk_nope_head_dim=qk_nope_head_dim,

@@ -64,7 +64,9 @@ caller-owned scratch buffers. The pinned GLM-5.2 config and Hugging Face index a
 fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
 expert tensor. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal
 top-k/tie behavior, stable activations, and noaux_tc expert routing; model weight shards have not been
-downloaded.
+downloaded. A batch-one miniature prefill composes those operators through dense and sparse layers,
+IndexShare, routed and shared experts, residuals, and logits while proving that an unselected expert is
+never fetched. Its in-memory weights are a semantic fixture, not a production residency claim.
 
 Run the current Windows verification gate with:
 

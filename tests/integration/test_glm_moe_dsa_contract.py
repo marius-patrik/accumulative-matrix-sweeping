@@ -120,6 +120,8 @@ def test_official_glm52_dimensions_imply_the_observed_59585_tensor_names() -> No
         {"mlp_layer_types": ["sparse", "sparse"]},
         {"indexer_types": ["shared", "full"]},
         {"qk_head_dim": 5},
+        {"qk_rope_head_dim": 3, "qk_nope_head_dim": 1},
+        {"num_key_value_heads": 3},
         {"dtype": "float16"},
     ],
 )
