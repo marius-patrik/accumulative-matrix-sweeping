@@ -208,9 +208,20 @@ The reconstruction branch currently contains:
   use, a mutated embedding object fails with `INTEGRITY_FAILURE`, required-feature drift and partial
   inventories fail closed, and the measured maximum verification/range buffer in the 64-byte-arena test
   is 64 bytes.
+- a dependency-free experimental OpenAI/Froq protocol boundary. Responses and Chat Completions inputs
+  normalize to one typed request containing source-ordered messages, reasoning context, function calls
+  and results, tool schemas, structured-output intent, and sampling controls. Strict UTF-8 JSON parsing
+  rejects duplicate keys, unknown provider fields, undeclared tool choices, unsupported hosted tools,
+  and request bodies above 16 MiB before inference. The localhost adapter defaults to one admitted
+  request, exact model names, optional bearer authentication, typed JSON errors and retry headers, and
+  disconnect cancellation with exactly-once slot release. The Responses stream emits ordered
+  `response.created`, output-item/content/tool deltas, done frames, `response.completed`, and `[DONE]`;
+  the Chat path emits the parallel `chat.completion.chunk` contract. Tests exercise actual HTTP, exact
+  multiline reconstruction, late backend failure, overload/retry, and an unconsumed cancelled stream.
+  This is a wire/state-machine proof with an injected backend, not evidence of model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 123 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 133 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
@@ -246,9 +257,18 @@ non-overlapping coverage of the remaining data buffer. See the
 - The host has an up-to-date Rust MSVC toolchain and Visual Studio 2022 Build Tools with bundled
   CMake/Ninja, but no installed CUDA Toolkit or `nvcc`. CUDA code is therefore not yet buildable; the
   NVIDIA driver alone is not treated as evidence of a CUDA development environment.
-- Froq configuration is intentionally deferred while its 2,811-entry uncommitted rebrand is in
-  progress. The target configuration uses a custom provider with `api_backend = "responses"` and a
-  local `/v1` base URL once the server exists.
+- Froq configuration remains read-only while its 2,811-entry uncommitted rebrand is in progress. Its
+  own sampler fixtures were used to pin the local Responses/Chat stream shapes. The eventual pointer is
+  a custom provider with `api_backend = "responses"` and a local `/v1` base URL, but it will not be
+  added until the protocol adapter is connected to a real AMS model backend.
+- The protocol adapter currently rejects stored/continued Responses, background mode, hosted tools,
+  multiple choices, and unsupported sampling fields instead of silently changing their semantics.
+  `json_object` output requires strict duplicate-free JSON and object shape. JSON Schema intent is
+  normalized across both endpoints, but the serving boundary rejects it unless a backend explicitly
+  declares qualified schema enforcement; that implementation remains a gate. Image input follows the
+  same fail-closed capability flag and is disabled by default. Disconnect sets the engine cancellation
+  token and releases admission; a backend blocked without yielding must still add cooperative polling
+  at its own safe points before cancellation latency can be claimed.
 - Quality and throughput thresholds remain unset until GLM-4.7-Flash produces a reproducible baseline.
   Correctness, bounded residency, and protocol semantics are hard gates regardless of speed.
 - The pinned GLM-4.7-Flash index declares `total_size = 31,221,488,576`, but the immutable Hub revision

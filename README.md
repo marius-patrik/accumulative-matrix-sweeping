@@ -57,8 +57,8 @@ indexes,
 publishes schema-valid AMS manifests last, and implements a deterministic grouped ternary reference
 codec with crash-recoverable transformed chunks. An explicit mixed policy can retain sensitive tensors
 exactly while ternarizing selected tensors in the same journaled, schema-valid package. It is not yet a
-GLM inference engine or an OpenAI-compatible server, and the ternary codec is not a default quality
-policy. The CPU semantic oracle can multiply directly from grouped ternary storage with bounded
+complete GLM inference engine or a model-backed OpenAI-compatible service, and the ternary codec is not
+a default quality policy. The CPU semantic oracle can multiply directly from grouped ternary storage with bounded
 encoded-group, decoded-group, and output-row tiles; it never reconstructs the matrix in full. A
 dependency-free Rust native core now implements the same codec and direct linear path using exclusively
 caller-owned scratch buffers, plus allocation-free identity linear execution directly from FP16,
@@ -80,6 +80,11 @@ without advancing its visible prefix, then publish it only after the layer succe
 native dense GLM-4 decoder-layer path composes both RMSNorms, MLA, staged causal attention, output
 projection, residuals, and gated MLP transactionally; a late failure leaves both cache and caller output
 unchanged so the token position can be retried.
+An experimental dependency-free localhost adapter now normalizes Froq-shaped Responses and Chat
+Completions requests into one typed model contract and emits byte-exact text, reasoning, tool-call,
+usage, error, and SSE terminal frames. It is deliberately backend-injected: no fixture response is
+presented as model inference, and unsupported persistence, hosted-tool, and provider fields fail during
+request preflight.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,
