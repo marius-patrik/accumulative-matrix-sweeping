@@ -40,6 +40,11 @@ from ams.integrations.huggingface import (
     build_huggingface_mixed_plan,
     parse_huggingface_shard_index,
 )
+from ams.integrations.huggingface_staging import (
+    StagedHuggingFaceShard,
+    release_huggingface_shard,
+    stage_huggingface_shard,
+)
 from ams.integrations.safetensors import (
     SafetensorsHeader,
     SafetensorsLimits,
@@ -74,6 +79,7 @@ __all__ = [
     "SafetensorsHeader",
     "SafetensorsLimits",
     "SafetensorsTensor",
+    "StagedHuggingFaceShard",
     "audit_huggingface_headers",
     "build_huggingface_catalog",
     "build_huggingface_identity_plan",
@@ -84,6 +90,8 @@ __all__ = [
     "parse_glm_moe_dsa_architecture",
     "parse_huggingface_shard_index",
     "parse_safetensors_header",
+    "release_huggingface_shard",
+    "stage_huggingface_shard",
     "validate_glm4_moe_lite_tensor_inventory",
     "validate_glm_tensor_inventory",
 ]

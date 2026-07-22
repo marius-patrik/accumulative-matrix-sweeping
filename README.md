@@ -89,6 +89,10 @@ That reader has audited every header in the pinned 48-shard GLM-4.7-Flash checkp
 downloading tensor payloads: all 9,703 index mappings are present and contiguous. The provider's
 nonstandard `total_size` is proven to count elements, and that interpretation is accepted only when
 the exact pinned index hash is supplied; ordinary Hugging Face catalogs still require byte totals.
+A verified ephemeral shard lease can now transfer one immutable source object into a
+content-addressed cache, reuse it after interruption without remote I/O, and release only its exact
+cache slot after downstream publication. This is the bounded-disk primitive for eventual GLM-5.2
+shard-at-a-time conversion; the global progressive conversion journal is still to be connected.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,

@@ -151,6 +151,12 @@ The reconstruction branch currently contains:
   model-scoped catalog policy permits this interpretation only with the exact pinned index hash;
   standard catalogs remain byte-exact. This is structural header evidence, not full payload integrity:
   only shard 2 has also been downloaded and independently SHA-256 verified.
+- a restart-safe ephemeral shard lease built on content-addressed atomic range copy. It transfers and
+  full-hash-verifies one immutable shard before exposing a local reader, reuses a completed lease
+  without remote I/O, leaves a failed-hash object unpublished, and releases only the exact object path
+  under a validated cache marker. A real 1,270,648,128-byte GLM-4.7 shard completed stage and guarded
+  release with a fixed 4 MiB buffer. This establishes one-shard source residency; progressive mixed
+  conversion and its global journal still need to consume the lease before GLM-5.2 conversion begins.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -231,7 +237,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 140 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 143 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
