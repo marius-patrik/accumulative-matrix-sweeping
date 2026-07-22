@@ -62,7 +62,9 @@ policy. The CPU semantic oracle can multiply directly from grouped ternary stora
 encoded-group, decoded-group, and output-row tiles; it never reconstructs the matrix in full. A
 dependency-free Rust native core now implements the same codec and direct linear path using exclusively
 caller-owned scratch buffers, plus allocation-free identity linear execution directly from FP16,
-BF16, or FP32 storage. The pinned GLM-5.2 config and Hugging Face index also pass an exact,
+BF16, or FP32 storage. It also pins allocation-free RMSNorm, LayerNorm, SiLU, softmax, both GLM
+rotary layouts, causal DSA top-k, and noaux_tc expert routing with caller-owned outputs and scratch.
+The pinned GLM-5.2 config and Hugging Face index also pass an exact,
 fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
 expert tensor. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal
 top-k/tie behavior, stable activations, and noaux_tc expert routing; model weight shards have not been

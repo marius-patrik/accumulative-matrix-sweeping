@@ -243,11 +243,16 @@ def route_glm_experts_reference(
         raise AmsError(ErrorCode.PLAN_INVALID, "router top-k exceeds its candidate dimensions")
     if not math.isfinite(routed_scaling_factor) or routed_scaling_factor <= 0:
         raise AmsError(ErrorCode.PLAN_INVALID, "router scaling factor must be finite and positive")
+    experts_per_group = len(logits) // group_count
+    if experts_per_token > top_groups * experts_per_group:
+        raise AmsError(
+            ErrorCode.PLAN_INVALID,
+            "router selected groups cannot contain the requested experts",
+        )
     probabilities = tuple(_sigmoid(value) for value in logits)
     corrected = tuple(
         probability + offset for probability, offset in zip(probabilities, bias, strict=True)
     )
-    experts_per_group = len(logits) // group_count
     group_scores: list[tuple[int, float]] = []
     for group_index in range(group_count):
         start = group_index * experts_per_group

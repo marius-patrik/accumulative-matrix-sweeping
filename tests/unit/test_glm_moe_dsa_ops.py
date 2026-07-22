@@ -82,6 +82,31 @@ def test_noaux_router_applies_group_filter_bias_and_unbiased_output_weights() ->
     )
 
 
+def test_noaux_router_accepts_exact_selected_group_capacity() -> None:
+    routing = route_glm_experts_reference(
+        (4.0, 3.0, 2.0, 1.0),
+        (0.0, 0.0, 0.0, 0.0),
+        experts_per_token=2,
+        group_count=2,
+        top_groups=1,
+        routed_scaling_factor=1.0,
+    )
+    assert routing.expert_indices == (0, 1)
+
+
+def test_noaux_router_rejects_selection_larger_than_retained_groups() -> None:
+    with pytest.raises(AmsError) as caught:
+        route_glm_experts_reference(
+            (4.0, 3.0, 2.0, 1.0),
+            (0.0, 0.0, 0.0, 0.0),
+            experts_per_token=3,
+            group_count=2,
+            top_groups=1,
+            routed_scaling_factor=1.0,
+        )
+    assert caught.value.code is ErrorCode.PLAN_INVALID
+
+
 def test_scalar_activation_and_softmax_are_stable_at_extreme_values() -> None:
     assert silu_reference(-1000.0) == pytest.approx(0.0, abs=1e-300)
     probabilities = softmax_reference((1000.0, 999.0, -1000.0))

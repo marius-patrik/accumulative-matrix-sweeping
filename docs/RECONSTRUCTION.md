@@ -135,6 +135,10 @@ The reconstruction branch currently contains:
   softmax, interleaved MLA RoPE, half-split indexer RoPE, causal DSA top-k with key-index tie breaking,
   and sigmoid/noaux_tc grouped expert routing. Correction bias affects expert choice but not mixture
   weight, matching the pinned reference order.
+- allocation-free native implementations of those same GLM control operators with caller-owned
+  outputs and exact scratch requirements for causal DSA selection and expert routing. Cross-language
+  constants pin normalization and both RoPE layouts; malformed routing capacity is rejected during
+  planning rather than surfacing as an internal execution failure.
 - a deterministic batch-one miniature GLM-MoE-DSA prefill that composes embedding lookup, a dense
   decoder layer with a full DSA indexer, a sparse layer reusing those indices, causal attention, routed
   plus shared experts, residuals, final normalization, and LM-head logits. Its access-denial invariant
@@ -149,7 +153,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 102 Python tests, and runs 8 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 104 Python tests, and runs 16 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
