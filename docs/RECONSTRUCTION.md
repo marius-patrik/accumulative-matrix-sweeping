@@ -180,9 +180,12 @@ The reconstruction branch currently contains:
   low-nibble-first values per byte; values are restricted to `[-7, 7]`, the `-8` code is rejected,
   tail padding must be canonical zero, and rounding is half away from zero against the stored scale.
   FP16, BF16, and FP32 sources produce the same reviewed encoding, source reads are group-bounded, and
-  checksum, non-finite, reserved-code, and padding failures are pinned. This is not yet a production
-  storage layout: publication records, manifests, package readers, native direct linear execution,
-  and quality qualification remain required before any GLM tensor may use it.
+  checksum, non-finite, reserved-code, and padding failures are pinned. A content-addressed INT4
+  publication transaction now binds its durable record to the exact source, shape, dtype, and codec
+  configuration; completed and pending transactions recover without source rereads, while orphaned,
+  corrupt, or plan-disagreeing state fails closed. This is not yet a production storage layout:
+  mixed plans/manifests, package readers, native direct linear execution, and quality qualification
+  remain required before any GLM tensor may use it.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and

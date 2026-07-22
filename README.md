@@ -103,7 +103,10 @@ same plan, journal, manifest, and manifest-last package publication.
 The first low-bit candidate is now pinned as the opt-in `ams.int4.symmetric` v1 reference codec:
 grouped FP32 scales, signed low-nibble-first values restricted to -7 through 7, deterministic
 half-away-from-zero rounding, canonical tail padding, bounded source reads, and strict checksum/
-numeric validation. It is not yet admitted into mixed manifests or a GLM precision policy.
+numeric validation. Its content-addressed chunk publisher has an exact configuration/source record,
+resumes completed and pending transactions without source rereads, rejects orphaned or corrupt state,
+and journals only verified output. It is not yet admitted into mixed manifests, native execution, or a
+GLM precision policy.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,
