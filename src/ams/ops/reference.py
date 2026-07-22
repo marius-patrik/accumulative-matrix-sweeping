@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import math
 import struct
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from ams.checked import checked_add, checked_mul, checked_positive, checked_uint
 from ams.codecs import TernaryCodecConfig, decode_ternary_group_reference
+from ams.descriptors import DType
 from ams.errors import AmsError, ErrorCode
 from ams.storage import RangeReader
 
-_F32_BYTES = 4
 _ACCUMULATOR_BYTES = 8
+_IDENTITY_ITEM_BYTES = {
+    DType.FLOAT16: 2,
+    DType.BFLOAT16: 2,
+    DType.FLOAT32: 4,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +29,8 @@ class StreamedLinearPlan:
     arena_bytes: int
     reduction_tile: int
     working_set_bytes: int
+    storage_dtype: DType
+    item_bytes: int
 
     @classmethod
     def create(
@@ -32,28 +40,37 @@ class StreamedLinearPlan:
         columns: int,
         weight_offset: int,
         arena_bytes: int,
+        storage_dtype: DType = DType.FLOAT32,
     ) -> StreamedLinearPlan:
         checked_positive(rows, name="linear.rows")
         checked_positive(columns, name="linear.columns")
         checked_uint(weight_offset, name="linear.weight_offset")
         checked_positive(arena_bytes, name="linear.arena_bytes")
-        minimum = _F32_BYTES + _ACCUMULATOR_BYTES
+        try:
+            storage_dtype = DType(storage_dtype)
+            item_bytes = _IDENTITY_ITEM_BYTES[storage_dtype]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "linear identity storage dtype is unsupported",
+            ) from exc
+        minimum = item_bytes + _ACCUMULATOR_BYTES
         if arena_bytes < minimum:
             raise AmsError(
                 ErrorCode.PREFLIGHT_NO_WORKING_SET,
                 "linear arena cannot hold one weight and its accumulator",
                 evidence={"available": arena_bytes, "minimum": minimum},
             )
-        reduction_tile = min(columns, (arena_bytes - _ACCUMULATOR_BYTES) // _F32_BYTES)
+        reduction_tile = min(columns, (arena_bytes - _ACCUMULATOR_BYTES) // item_bytes)
         working_set_bytes = checked_add(
-            checked_mul(reduction_tile, _F32_BYTES, name="linear.weight_buffer"),
+            checked_mul(reduction_tile, item_bytes, name="linear.weight_buffer"),
             _ACCUMULATOR_BYTES,
             name="linear.working_set",
         )
         weight_elements = checked_mul(rows, columns, name="linear.weight_elements")
         checked_add(
             weight_offset,
-            checked_mul(weight_elements, _F32_BYTES, name="linear.weight_bytes"),
+            checked_mul(weight_elements, item_bytes, name="linear.weight_bytes"),
             name="linear.weight_end",
         )
         return cls(
@@ -63,6 +80,8 @@ class StreamedLinearPlan:
             arena_bytes=arena_bytes,
             reduction_tile=reduction_tile,
             working_set_bytes=working_set_bytes,
+            storage_dtype=storage_dtype,
+            item_bytes=item_bytes,
         )
 
 
@@ -74,25 +93,46 @@ def stream_linear_f32(
     *,
     bias: Sequence[float] | None = None,
 ) -> None:
-    """Compute row-major FP32 weights one output scalar at a time.
+    """Compute row-major FP32 weights through the typed identity implementation."""
+    if plan.storage_dtype is not DType.FLOAT32:
+        raise AmsError(ErrorCode.PLAN_INVALID, "FP32 linear received a non-FP32 plan")
+    stream_linear_identity(store, plan, vector, emit, bias=bias)
 
-    The input vector is part of the runtime base. Weight residency is bounded by
-    ``plan.reduction_tile * 4`` and output residency is a single accumulator.
-    """
+
+def _decode_identity_value(buffer: bytearray, offset: int, dtype: DType) -> float:
+    if dtype is DType.FLOAT32:
+        return struct.unpack_from("<f", buffer, offset)[0]
+    if dtype is DType.FLOAT16:
+        return struct.unpack_from("<e", buffer, offset)[0]
+    if dtype is DType.BFLOAT16:
+        word = struct.unpack_from("<H", buffer, offset)[0]
+        return struct.unpack("<f", struct.pack("<I", word << 16))[0]
+    raise AmsError(ErrorCode.INTERNAL_INVARIANT, "identity linear dtype changed after planning")
+
+
+def stream_linear_identity(
+    store: RangeReader,
+    plan: StreamedLinearPlan,
+    vector: Sequence[float],
+    emit: Callable[[int, float], None],
+    *,
+    bias: Sequence[float] | None = None,
+) -> None:
+    """Compute row-major FP16/BF16/FP32 weights one output scalar at a time."""
     if len(vector) != plan.columns:
         raise AmsError(ErrorCode.PLAN_INVALID, "linear input length does not match columns")
     if bias is not None and len(bias) != plan.rows:
         raise AmsError(ErrorCode.PLAN_INVALID, "linear bias length does not match rows")
     weight_bytes = checked_mul(
         checked_mul(plan.rows, plan.columns, name="linear.weight_elements"),
-        _F32_BYTES,
+        plan.item_bytes,
         name="linear.weight_bytes",
     )
     weight_end = checked_add(plan.weight_offset, weight_bytes, name="linear.weight_end")
     if weight_end > store.size_bytes:
         raise AmsError(ErrorCode.IO_FAILURE, "linear weights exceed the storage object")
 
-    buffer = bytearray(plan.reduction_tile * _F32_BYTES)
+    buffer = bytearray(plan.reduction_tile * plan.item_bytes)
     view = memoryview(buffer)
     try:
         for row in range(plan.rows):
@@ -101,18 +141,31 @@ def stream_linear_f32(
                 plan.weight_offset,
                 checked_mul(
                     checked_mul(row, plan.columns, name="linear.row_elements"),
-                    _F32_BYTES,
+                    plan.item_bytes,
                     name="linear.row_bytes",
                 ),
                 name="linear.row_offset",
             )
             for start in range(0, plan.columns, plan.reduction_tile):
                 count = min(plan.reduction_tile, plan.columns - start)
-                byte_count = count * _F32_BYTES
-                offset = checked_add(row_base, start * _F32_BYTES, name="linear.tile_offset")
+                byte_count = count * plan.item_bytes
+                offset = checked_add(
+                    row_base,
+                    start * plan.item_bytes,
+                    name="linear.tile_offset",
+                )
                 store.read_into(offset, view[:byte_count])
                 for index in range(count):
-                    weight = struct.unpack_from("<f", buffer, index * _F32_BYTES)[0]
+                    weight = _decode_identity_value(
+                        buffer,
+                        index * plan.item_bytes,
+                        plan.storage_dtype,
+                    )
+                    if not math.isfinite(weight):
+                        raise AmsError(
+                            ErrorCode.NUMERIC_FAILURE,
+                            "identity linear weight is non-finite",
+                        )
                     accumulator += weight * float(vector[start + index])
             emit(row, accumulator)
     finally:

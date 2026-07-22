@@ -24,7 +24,7 @@ from ams.ops.glm_moe_dsa_model import GlmWeightAccess
 from ams.ops.reference import (
     StreamedLinearPlan,
     TernaryStreamedLinearPlan,
-    stream_linear_f32,
+    stream_linear_identity,
     stream_linear_ternary,
 )
 from ams.package import resolve_package_file, resolve_package_root, verify_manifest_content_root
@@ -529,30 +529,57 @@ class GlmPackageWeights(GlmWeightAccess):
             raise AmsError(ErrorCode.INVALID_PACKAGE, "required package tensor is absent") from exc
 
     @staticmethod
-    def _require_identity_f32(tensor: _PackageTensor) -> None:
-        if tensor.encoding != "identity" or tensor.logical_dtype is not DType.FLOAT32:
+    def _require_identity(tensor: _PackageTensor) -> None:
+        if tensor.encoding != "identity":
             raise AmsError(
                 ErrorCode.CAPABILITY_MISMATCH,
-                "vector and embedding access currently require identity FP32",
+                "vector and embedding access require identity storage",
             )
+
+    @staticmethod
+    def _decode_identity(payload: bytearray, count: int, dtype: DType) -> tuple[float, ...]:
+        if dtype is DType.FLOAT32:
+            values = struct.unpack(f"<{count}f", payload)
+        elif dtype is DType.FLOAT16:
+            values = struct.unpack(f"<{count}e", payload)
+        elif dtype is DType.BFLOAT16:
+            values = tuple(
+                struct.unpack(
+                    "<f",
+                    struct.pack("<I", struct.unpack_from("<H", payload, index * 2)[0] << 16),
+                )[0]
+                for index in range(count)
+            )
+        else:
+            raise AmsError(ErrorCode.INTERNAL_INVARIANT, "identity dtype changed after loading")
+        if any(not math.isfinite(value) for value in values):
+            raise AmsError(ErrorCode.NUMERIC_FAILURE, "identity tensor contains non-finite data")
+        return tuple(values)
+
+    @classmethod
+    def _read_identity(
+        cls,
+        tensor: _PackageTensor,
+        offset: int,
+        count: int,
+    ) -> tuple[float, ...]:
+        item_bytes = _ITEM_BYTES[tensor.logical_dtype]
+        payload = bytearray(checked_mul(count, item_bytes, name="package_identity.bytes"))
+        tensor.reader.read_into(offset, payload)
+        return cls._decode_identity(payload, count, tensor.logical_dtype)
 
     def vector(self, tensor_name: str, length: int) -> tuple[float, ...]:
         checked_positive(length, name="package_vector.length")
         tensor = self._tensor(tensor_name)
-        self._require_identity_f32(tensor)
+        self._require_identity(tensor)
         if tensor.shape != (length,):
             raise AmsError(ErrorCode.INVALID_PACKAGE, "package vector shape is invalid")
-        payload = bytearray(checked_mul(length, 4, name="package_vector.bytes"))
-        tensor.reader.read_into(tensor.offset, payload)
-        values = struct.unpack(f"<{length}f", payload)
-        if any(not math.isfinite(value) for value in values):
-            raise AmsError(ErrorCode.NUMERIC_FAILURE, "package vector contains non-finite data")
-        return values
+        return self._read_identity(tensor, tensor.offset, length)
 
     def embedding(self, tensor_name: str, index: int, width: int) -> tuple[float, ...]:
         checked_positive(width, name="package_embedding.width")
         tensor = self._tensor(tensor_name)
-        self._require_identity_f32(tensor)
+        self._require_identity(tensor)
         if len(tensor.shape) != 2 or tensor.shape[1] != width:
             raise AmsError(ErrorCode.INVALID_PACKAGE, "package embedding shape is invalid")
         if (
@@ -561,18 +588,14 @@ class GlmPackageWeights(GlmWeightAccess):
             or not 0 <= index < tensor.shape[0]
         ):
             raise AmsError(ErrorCode.PLAN_INVALID, "package embedding index is invalid")
-        row_bytes = checked_mul(width, 4, name="package_embedding.row_bytes")
+        item_bytes = _ITEM_BYTES[tensor.logical_dtype]
+        row_bytes = checked_mul(width, item_bytes, name="package_embedding.row_bytes")
         offset = checked_add(
             tensor.offset,
             checked_mul(index, row_bytes, name="package_embedding.row_offset"),
             name="package_embedding.offset",
         )
-        payload = bytearray(row_bytes)
-        tensor.reader.read_into(offset, payload)
-        values = struct.unpack(f"<{width}f", payload)
-        if any(not math.isfinite(value) for value in values):
-            raise AmsError(ErrorCode.NUMERIC_FAILURE, "package embedding contains non-finite data")
-        return values
+        return self._read_identity(tensor, offset, width)
 
     def linear(
         self,
@@ -586,18 +609,19 @@ class GlmPackageWeights(GlmWeightAccess):
             raise AmsError(ErrorCode.INVALID_PACKAGE, "package linear shape is invalid")
         output: list[float] = []
         if tensor.encoding == "identity":
-            if tensor.logical_dtype is not DType.FLOAT32:
-                raise AmsError(
-                    ErrorCode.CAPABILITY_MISMATCH,
-                    "identity linear currently requires FP32 storage",
-                )
             plan = StreamedLinearPlan.create(
                 rows=rows,
                 columns=len(values),
                 weight_offset=tensor.offset,
                 arena_bytes=self._linear_arena_bytes,
+                storage_dtype=tensor.logical_dtype,
             )
-            stream_linear_f32(tensor.reader, plan, values, lambda _, value: output.append(value))
+            stream_linear_identity(
+                tensor.reader,
+                plan,
+                values,
+                lambda _, value: output.append(value),
+            )
         elif tensor.encoding == "ternary_trit5" and tensor.ternary_config is not None:
             plan = TernaryStreamedLinearPlan.create(
                 rows=rows,

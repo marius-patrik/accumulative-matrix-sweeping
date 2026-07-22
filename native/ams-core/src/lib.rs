@@ -7,10 +7,15 @@
 
 mod checked;
 mod error;
+mod identity;
 mod reader;
 mod ternary;
 
 pub use error::{AmsError, ErrorCode};
+pub use identity::{
+    IdentityDType, IdentityLinearPlan, IdentityScratch, IdentityScratchRequirements,
+    stream_linear_identity,
+};
 pub use reader::{FileRangeReader, RangeReader, SliceReader};
 pub use ternary::{
     TernaryConfig, TernaryLinearPlan, TernaryScratch, TernaryScratchRequirements,

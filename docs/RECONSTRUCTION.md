@@ -116,14 +116,15 @@ The reconstruction branch currently contains:
 - an explicit mixed-policy planner that requires exactly one assignment for every source tensor and
   can publish identity and ternary layouts together under one policy hash, conversion journal,
   schema-valid manifest, and atomic package root;
-- a scalar source-order FP32 linear oracle that streams weights and emits one output at a time;
+- a scalar source-order FP16/BF16/FP32 identity linear oracle that streams weights and emits one
+  output at a time;
 - a direct ternary linear oracle that reads and validates one encoded group, decodes one bounded group,
   accumulates a bounded output-row tile, and matches source-order multiplication over the trusted full
   decoder without reconstructing the parameter matrix.
 - a dependency-free, `unsafe`-forbidden Rust core with the complete normative error-code spellings,
   checked in-memory and nonsymlink regular-file positional reads, ternary group decode, arena preflight,
-  and direct ternary linear execution using caller-owned encoded, decoded, and FP64 accumulator scratch;
-  native format/check/test/strict-Clippy gates pass on the Windows MSVC toolchain.
+  direct ternary linear execution, and FP16/BF16/FP32 identity linear execution using caller-owned
+  scratch; native format/check/test/strict-Clippy gates pass on the Windows MSVC toolchain.
 - a bounded, duplicate-key-rejecting GLM-MoE-DSA architecture parser and fail-closed tensor inventory
   that distinguishes dense layers, shared experts, every routed expert, full/shared DSA indexers, and
   MTP tensors. The generated 59,585-name inventory exactly matches the pinned official GLM-5.2 index:
@@ -148,7 +149,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 99 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 102 Python tests, and runs 8 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

@@ -24,6 +24,7 @@ from ams.ops.reference import (
     StreamedLinearPlan,
     TernaryStreamedLinearPlan,
     stream_linear_f32,
+    stream_linear_identity,
     stream_linear_ternary,
 )
 
@@ -48,5 +49,6 @@ __all__ = [
     "silu_reference",
     "softmax_reference",
     "stream_linear_f32",
+    "stream_linear_identity",
     "stream_linear_ternary",
 ]

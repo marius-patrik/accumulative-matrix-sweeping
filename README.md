@@ -52,7 +52,8 @@ Production reconstruction is active on an isolated branch. The first executable 
 checked byte arithmetic, stable typed errors, immutable package and conversion-journal descriptors,
 canonical JSON, atomic resource-vector admission, a bounded synchronous file store, a hardened
 safetensors metadata boundary, restart-safe content-addressed range publication, and a scalar streamed
-FP32 linear oracle. The experimental storage path also normalizes multi-shard Hugging Face indexes,
+FP16/BF16/FP32 linear oracle. The experimental storage path also normalizes multi-shard Hugging Face
+indexes,
 publishes schema-valid AMS manifests last, and implements a deterministic grouped ternary reference
 codec with crash-recoverable transformed chunks. An explicit mixed policy can retain sensitive tensors
 exactly while ternarizing selected tensors in the same journaled, schema-valid package. It is not yet a
@@ -60,7 +61,8 @@ GLM inference engine or an OpenAI-compatible server, and the ternary codec is no
 policy. The CPU semantic oracle can multiply directly from grouped ternary storage with bounded
 encoded-group, decoded-group, and output-row tiles; it never reconstructs the matrix in full. A
 dependency-free Rust native core now implements the same codec and direct linear path using exclusively
-caller-owned scratch buffers. The pinned GLM-5.2 config and Hugging Face index also pass an exact,
+caller-owned scratch buffers, plus allocation-free identity linear execution directly from FP16,
+BF16, or FP32 storage. The pinned GLM-5.2 config and Hugging Face index also pass an exact,
 fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
 expert tensor. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal
 top-k/tie behavior, stable activations, and noaux_tc expert routing; model weight shards have not been
