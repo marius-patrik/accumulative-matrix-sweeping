@@ -50,9 +50,10 @@ The package contains no fabricated performance results. The manuscript defines a
 
 Production reconstruction is active on an isolated branch. The first executable slice provides
 checked byte arithmetic, stable typed errors, immutable package and conversion-journal descriptors,
-canonical JSON, atomic resource-vector admission, a bounded synchronous file store, and a scalar
-streamed FP32 linear oracle. It is a semantic and resource-bound reference, not yet a GLM inference
-engine or an OpenAI-compatible server.
+canonical JSON, atomic resource-vector admission, a bounded synchronous file store, a hardened
+safetensors metadata boundary, restart-safe content-addressed range publication, and a scalar streamed
+FP32 linear oracle. It is a semantic and resource-bound reference, not yet a GLM inference engine or
+an OpenAI-compatible server.
 
 See [`docs/RECONSTRUCTION.md`](docs/RECONSTRUCTION.md) for source authority, hardware and model
 targets, implementation gates, integration boundaries, and current evidence.

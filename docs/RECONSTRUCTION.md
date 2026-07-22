@@ -99,14 +99,23 @@ The reconstruction branch currently contains:
 - deterministic canonical JSON for control-plane artifacts;
 - componentwise resource vectors and atomic, idempotently released reservations;
 - an immutable synchronous file range store with exact reads and bounded hash verification;
+- a strict safetensors header normalizer with duplicate-key, dtype, shape, range, complete-coverage,
+  metadata, and allocation-limit checks, differential-tested against the official Python writer;
+- bounded content-addressed range publication and an atomically replaced conversion journal whose
+  completed chunks survive process restart without rereading source bytes;
 - a scalar source-order FP32 linear oracle that streams weights and emits one output at a time.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, and runs 22 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
+Draft 2020-12, and runs 35 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
 accumulator remains within that arena. This proves only the Phase 0 reference behavior; Python
 allocator overhead is not claimed as a production memory proof.
+
+The safetensors boundary follows the official format contract: an eight-byte little-endian header
+length, bounded UTF-8 JSON metadata, relative tensor data offsets, duplicate-key rejection, and complete
+non-overlapping coverage of the remaining data buffer. See the
+[official safetensors format](https://github.com/huggingface/safetensors#format).
 
 ## Known decisions and blockers
 
