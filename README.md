@@ -45,3 +45,14 @@ The initial production slice is deliberately narrower than "all models": it supp
 ## Evaluation status
 
 The package contains no fabricated performance results. The manuscript defines a benchmark protocol, baselines, hardware matrix, metrics, and acceptance thresholds. An implementation must publish measured artifacts, traces, capability fingerprints, and exact configurations before making performance claims.
+
+## Reconstruction status
+
+Production reconstruction is active on an isolated branch. The first executable slice provides
+checked byte arithmetic, stable typed errors, immutable package and conversion-journal descriptors,
+canonical JSON, atomic resource-vector admission, a bounded synchronous file store, and a scalar
+streamed FP32 linear oracle. It is a semantic and resource-bound reference, not yet a GLM inference
+engine or an OpenAI-compatible server.
+
+See [`docs/RECONSTRUCTION.md`](docs/RECONSTRUCTION.md) for source authority, hardware and model
+targets, implementation gates, integration boundaries, and current evidence.
