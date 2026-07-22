@@ -130,9 +130,13 @@ The reconstruction branch currently contains:
   282 shards and 1,506,659,919,872 declared BF16 tensor bytes. The config and index SHA-256 digests are
   `185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a` and
   `5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e`.
+- deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
+  softmax, interleaved MLA RoPE, half-split indexer RoPE, causal DSA top-k with key-index tie breaking,
+  and sigmoid/noaux_tc grouped expert routing. Correction bias affects expert choice but not mixture
+  weight, matching the pinned reference order.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 83 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 91 Python tests, and runs 6 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

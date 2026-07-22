@@ -62,7 +62,9 @@ encoded-group, decoded-group, and output-row tiles; it never reconstructs the ma
 dependency-free Rust native core now implements the same codec and direct linear path using exclusively
 caller-owned scratch buffers. The pinned GLM-5.2 config and Hugging Face index also pass an exact,
 fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
-expert tensor; model weight shards have not been downloaded.
+expert tensor. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal
+top-k/tie behavior, stable activations, and noaux_tc expert routing; model weight shards have not been
+downloaded.
 
 Run the current Windows verification gate with:
 
