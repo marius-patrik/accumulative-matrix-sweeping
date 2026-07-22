@@ -71,6 +71,51 @@ impl Glm4DecoderPlan {
     pub fn sparse_scratch(&self) -> &[Glm4SparseLayerScratchRequirements] {
         &self.sparse_scratch
     }
+
+    pub(crate) fn preflight(
+        &self,
+        readers: &Glm4DecoderReaders<'_, '_, '_>,
+        caches: &[KvCache<'_>],
+        position: usize,
+        dense_scratch: &Glm4DenseLayerScratch<'_>,
+        sparse_scratch: &Glm4SparseLayerScratch<'_>,
+    ) -> Result<(), AmsError> {
+        if readers.sparse.len() != self.sparse.len() {
+            return Err(AmsError::new(
+                ErrorCode::PlanInvalid,
+                "GLM-4 decoder reader inventory differs from the plan",
+            ));
+        }
+        if caches.len() != self.layer_count() {
+            return Err(AmsError::new(
+                ErrorCode::PlanInvalid,
+                "GLM-4 decoder cache inventory differs from the plan",
+            ));
+        }
+        self.dense
+            .preflight(&readers.dense, &caches[0], position, dense_scratch)?;
+        for ((layer, layer_readers), cache) in
+            self.sparse.iter().zip(readers.sparse).zip(&caches[1..])
+        {
+            layer.preflight(layer_readers, cache, position, sparse_scratch)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn rollback(
+        &self,
+        caches: &mut [KvCache<'_>],
+        position: usize,
+    ) -> Result<(), AmsError> {
+        if caches.len() != self.layer_count() {
+            return Err(AmsError::new(
+                ErrorCode::InternalInvariant,
+                "GLM-4 decoder rollback cache inventory differs from the plan",
+            ));
+        }
+        let committed_layers = caches.len();
+        rollback_prefixes(caches, position, committed_layers)
+    }
 }
 
 /// Weight bindings for one complete decoder stack.
@@ -124,18 +169,6 @@ pub fn glm4_decoder_token(
     hidden_b: &mut [f64],
     output: &mut [f64],
 ) -> Result<(), AmsError> {
-    if readers.sparse.len() != plan.sparse.len() {
-        return Err(AmsError::new(
-            ErrorCode::PlanInvalid,
-            "GLM-4 decoder reader inventory differs from the plan",
-        ));
-    }
-    if caches.len() != plan.layer_count() {
-        return Err(AmsError::new(
-            ErrorCode::PlanInvalid,
-            "GLM-4 decoder cache inventory differs from the plan",
-        ));
-    }
     if hidden.len() != plan.hidden_elements
         || hidden_a.len() < plan.hidden_elements
         || hidden_b.len() < plan.hidden_elements
@@ -152,12 +185,7 @@ pub fn glm4_decoder_token(
             "GLM-4 decoder hidden state is non-finite",
         ));
     }
-    plan.dense
-        .preflight(&readers.dense, &caches[0], position, dense_scratch)?;
-    for ((layer, layer_readers), cache) in plan.sparse.iter().zip(readers.sparse).zip(&caches[1..])
-    {
-        layer.preflight(layer_readers, cache, position, sparse_scratch)?;
-    }
+    plan.preflight(readers, caches, position, dense_scratch, sparse_scratch)?;
 
     let hidden_a = &mut hidden_a[..plan.hidden_elements];
     let hidden_b = &mut hidden_b[..plan.hidden_elements];
@@ -224,9 +252,10 @@ mod tests {
     use crate::{
         FullAttentionScratch, GatedMlpPlan, GatedMlpReaders, GatedMlpScratch,
         Glm4DenseLayerNormLayout, Glm4MlaNormLayout, Glm4MlaPlan, Glm4MlaReaders, Glm4MlaScratch,
+        Glm4ModelPlan, Glm4ModelReaders, Glm4ModelScratch, Glm4ModelVectorLayout,
         Glm4SparseLayerVectorLayout, GlmRouterPlan, GlmRouterScratch, IdentityDType,
         IdentityLinearPlan, KvCachePlan, LinearPlan, LinearScratch, RangeReader, SliceReader,
-        SparseMoeBindings, SparseMoePlan, SparseMoeScratch,
+        SparseMoeBindings, SparseMoePlan, SparseMoeScratch, glm4_model_next_token,
     };
 
     struct CountingReader {
@@ -330,19 +359,10 @@ mod tests {
         Ok((Glm4DecoderPlan::new(dense, vec![sparse])?, expert_plans))
     }
 
-    #[allow(
-        clippy::similar_names,
-        clippy::too_many_arguments,
-        clippy::too_many_lines
-    )]
-    fn run_fixture(
-        plan: &Glm4DecoderPlan,
-        readers: &Glm4DecoderReaders<'_, '_, '_>,
-        caches: &mut [KvCache<'_>; 2],
-        position: usize,
-        hidden: &[f64; 2],
-        output: &mut [f64; 2],
-    ) -> Result<(), AmsError> {
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
+    fn with_layer_scratch<T>(
+        operation: impl FnOnce(Glm4DenseLayerScratch<'_>, Glm4SparseLayerScratch<'_>) -> T,
+    ) -> T {
         let mut dense_mla_linear_encoded = [0u8; 16];
         let mut dense_mla_linear_decoded = [0.0f32; 0];
         let mut dense_mla_linear_accumulators = [0.0f64; 0];
@@ -417,7 +437,7 @@ mod tests {
         let mut dense_post_normalized = [0.0f64; 2];
         let mut dense_mlp_output = [0.0f64; 2];
         let mut dense_final_output = [0.0f64; 2];
-        let mut dense_scratch = Glm4DenseLayerScratch::new(
+        let dense_scratch = Glm4DenseLayerScratch::new(
             dense_mla,
             &mut dense_cache_staging,
             dense_attention,
@@ -537,7 +557,7 @@ mod tests {
         let mut sparse_post_normalized = [0.0f64; 2];
         let mut sparse_moe_output = [0.0f64; 2];
         let mut sparse_final_output = [0.0f64; 2];
-        let mut sparse_scratch = Glm4SparseLayerScratch::new(
+        let sparse_scratch = Glm4SparseLayerScratch::new(
             sparse_mla,
             &mut sparse_cache_staging,
             sparse_attention,
@@ -558,20 +578,72 @@ mod tests {
             &mut sparse_moe_output,
             &mut sparse_final_output,
         );
-        let mut hidden_a = [0.0f64; 2];
-        let mut hidden_b = [0.0f64; 2];
-        glm4_decoder_token(
-            plan,
-            readers,
-            caches,
-            position,
-            hidden,
-            &mut dense_scratch,
-            &mut sparse_scratch,
-            &mut hidden_a,
-            &mut hidden_b,
-            output,
-        )
+        operation(dense_scratch, sparse_scratch)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_fixture(
+        plan: &Glm4DecoderPlan,
+        readers: &Glm4DecoderReaders<'_, '_, '_>,
+        caches: &mut [KvCache<'_>; 2],
+        position: usize,
+        hidden: &[f64; 2],
+        output: &mut [f64; 2],
+    ) -> Result<(), AmsError> {
+        with_layer_scratch(|mut dense_scratch, mut sparse_scratch| {
+            let mut hidden_a = [0.0f64; 2];
+            let mut hidden_b = [0.0f64; 2];
+            glm4_decoder_token(
+                plan,
+                readers,
+                caches,
+                position,
+                hidden,
+                &mut dense_scratch,
+                &mut sparse_scratch,
+                &mut hidden_a,
+                &mut hidden_b,
+                output,
+            )
+        })
+    }
+
+    fn run_model_fixture(
+        plan: &Glm4ModelPlan,
+        readers: &Glm4ModelReaders<'_, '_, '_>,
+        caches: &mut [KvCache<'_>; 2],
+        position: usize,
+        input_token: usize,
+    ) -> Result<usize, AmsError> {
+        with_layer_scratch(|dense_scratch, sparse_scratch| {
+            let mut vector_encoded = [0u8; 8];
+            let mut lm_encoded = [0u8; 16];
+            let mut lm_decoded = [0.0f32; 0];
+            let mut lm_accumulators = [0.0f64; 0];
+            let lm_scratch =
+                LinearScratch::new(&mut lm_encoded, &mut lm_decoded, &mut lm_accumulators);
+            let mut input_hidden = [0.0f64; 2];
+            let mut hidden_a = [0.0f64; 2];
+            let mut hidden_b = [0.0f64; 2];
+            let mut decoder_output = [0.0f64; 2];
+            let mut norm_weights = [0.0f64; 2];
+            let mut normalized = [0.0f64; 2];
+            let mut logits = [0.0f64; 3];
+            let mut scratch = Glm4ModelScratch::new(
+                dense_scratch,
+                sparse_scratch,
+                &mut vector_encoded,
+                lm_scratch,
+                &mut input_hidden,
+                &mut hidden_a,
+                &mut hidden_b,
+                &mut decoder_output,
+                &mut norm_weights,
+                &mut normalized,
+                &mut logits,
+            );
+            glm4_model_next_token(plan, readers, caches, position, input_token, &mut scratch)
+        })
     }
 
     #[test]
@@ -749,6 +821,134 @@ mod tests {
             output.map(f64::to_bits),
             [1.0f64.to_bits(), (-1.0f64).to_bits()]
         );
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
+    fn model_executes_embedding_to_argmax_and_rolls_back_a_bad_lm_head() -> Result<(), AmsError> {
+        let (decoder, expert_plans) = fixture_plan()?;
+        let model = Glm4ModelPlan::new(
+            decoder,
+            linear_plan(3, 2)?,
+            Glm4ModelVectorLayout::new(0, 0, IdentityDType::Float32, IdentityDType::Float32),
+            1e-5,
+        )?;
+        assert_eq!(model.vocabulary_size(), 3);
+        assert_eq!(model.scratch().local_bytes, 144);
+        let norm = encode_f32(&[1.0, 1.0]);
+        let correction = encode_f32(&[0.0, 1.0]);
+        let zeros = encode_f32(&[0.0; 8]);
+        let embeddings = encode_f32(&[0.0, 0.0, 1.0, -1.0, -1.0, 1.0]);
+        let lm_head = encode_f32(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        let bad_lm_head = encode_f32(&[f32::NAN, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        let norm_reader = SliceReader::new(&norm);
+        let correction_reader = SliceReader::new(&correction);
+        let zero_reader = SliceReader::new(&zeros);
+        let embedding_reader = CountingReader::new(embeddings);
+        let lm_head_reader = SliceReader::new(&lm_head);
+        let short_lm_head_reader = SliceReader::new(&lm_head[..20]);
+        let bad_lm_head_reader = SliceReader::new(&bad_lm_head);
+        let shared = GatedMlpReaders::new(&zero_reader, &zero_reader, &zero_reader);
+        let experts = [
+            GatedMlpReaders::new(&zero_reader, &zero_reader, &zero_reader),
+            GatedMlpReaders::new(&zero_reader, &zero_reader, &zero_reader),
+        ];
+
+        let cache_plan =
+            KvCachePlan::new(1, 3, 2, 2, IdentityDType::Float32, IdentityDType::Float32)?;
+        let mut dense_keys = [0u8; 24];
+        let mut dense_values = [0u8; 16];
+        let mut sparse_keys = [0u8; 24];
+        let mut sparse_values = [0u8; 16];
+        let dense_cache = KvCache::new(cache_plan, &mut dense_keys, &mut dense_values)?;
+        let sparse_cache = KvCache::new(cache_plan, &mut sparse_keys, &mut sparse_values)?;
+        let mut caches = [dense_cache, sparse_cache];
+
+        let make_decoder_readers = || {
+            let dense_mla = Glm4MlaReaders::new(
+                &zero_reader,
+                &norm_reader,
+                &zero_reader,
+                &zero_reader,
+                &norm_reader,
+                &zero_reader,
+            );
+            let dense = Glm4DenseLayerReaders::new(
+                &norm_reader,
+                dense_mla,
+                &zero_reader,
+                &norm_reader,
+                GatedMlpReaders::new(&zero_reader, &zero_reader, &zero_reader),
+            );
+            let moe = SparseMoeBindings::new(&zero_reader, &expert_plans, &experts, &shared);
+            let sparse_mla = Glm4MlaReaders::new(
+                &zero_reader,
+                &norm_reader,
+                &zero_reader,
+                &zero_reader,
+                &norm_reader,
+                &zero_reader,
+            );
+            let sparse = Glm4SparseLayerReaders::new(
+                &norm_reader,
+                sparse_mla,
+                &zero_reader,
+                &norm_reader,
+                &correction_reader,
+                moe,
+            );
+            (dense, sparse)
+        };
+
+        let (short_dense, short_sparse) = make_decoder_readers();
+        let short_sparse_readers = [short_sparse];
+        let short_readers = Glm4ModelReaders::new(
+            &embedding_reader,
+            Glm4DecoderReaders::new(short_dense, &short_sparse_readers),
+            &norm_reader,
+            &short_lm_head_reader,
+        );
+        let error = run_model_fixture(&model, &short_readers, &mut caches, 0, 1).err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::IoFailure));
+        assert_eq!(embedding_reader.reads.get(), 0);
+        assert!(caches.iter().all(|cache| cache.committed_tokens() == 0));
+
+        let (dense, sparse) = make_decoder_readers();
+        let sparse_readers = [sparse];
+        let readers = Glm4ModelReaders::new(
+            &embedding_reader,
+            Glm4DecoderReaders::new(dense, &sparse_readers),
+            &norm_reader,
+            &lm_head_reader,
+        );
+        let token = run_model_fixture(&model, &readers, &mut caches, 0, 1)?;
+        assert_eq!(token, 1);
+        assert!(caches.iter().all(|cache| cache.committed_tokens() == 1));
+
+        let (bad_dense, bad_sparse) = make_decoder_readers();
+        let bad_sparse_readers = [bad_sparse];
+        let bad_readers = Glm4ModelReaders::new(
+            &embedding_reader,
+            Glm4DecoderReaders::new(bad_dense, &bad_sparse_readers),
+            &norm_reader,
+            &bad_lm_head_reader,
+        );
+        let error = run_model_fixture(&model, &bad_readers, &mut caches, 1, 1).err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::NumericFailure));
+        assert!(caches.iter().all(|cache| cache.committed_tokens() == 1));
+
+        let (retry_dense, retry_sparse) = make_decoder_readers();
+        let retry_sparse_readers = [retry_sparse];
+        let retry_readers = Glm4ModelReaders::new(
+            &embedding_reader,
+            Glm4DecoderReaders::new(retry_dense, &retry_sparse_readers),
+            &norm_reader,
+            &lm_head_reader,
+        );
+        let token = run_model_fixture(&model, &retry_readers, &mut caches, 1, 1)?;
+        assert_eq!(token, 1);
+        assert!(caches.iter().all(|cache| cache.committed_tokens() == 2));
         Ok(())
     }
 }

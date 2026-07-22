@@ -93,6 +93,10 @@ and leaves MTP explicitly unsupported.
 The native decoder-stack transaction preflights the dense layer and every sparse layer before its
 first read, reuses one working set per layer class, and treats all per-layer KV prefixes as one commit:
 a later expert failure rolls earlier layer prefixes back so the same token can be retried safely.
+The first native causal-LM token wrapper adds exact embedding-row access, final RMSNorm, mixed-storage
+LM-head execution, and deterministic lowest-index argmax. It preflights the complete manually bound
+model before the embedding read and rolls the decoder stack back if the final norm or head fails; a
+package-to-native binder, tokenizer, sampling, and generation loop are still required.
 An experimental dependency-free localhost adapter now normalizes Froq-shaped Responses and Chat
 Completions requests into one typed model contract and emits byte-exact text, reasoning, tool-call,
 usage, error, and SSE terminal frames. It is deliberately backend-injected: no fixture response is

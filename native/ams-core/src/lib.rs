@@ -13,6 +13,7 @@ mod glm;
 mod glm4_decoder;
 mod glm4_dense_layer;
 mod glm4_mla;
+mod glm4_model;
 mod glm4_sparse_layer;
 mod identity;
 mod int4;
@@ -44,6 +45,10 @@ pub use glm4_dense_layer::{
 pub use glm4_mla::{
     Glm4MlaNormLayout, Glm4MlaPlan, Glm4MlaReaders, Glm4MlaScratch, Glm4MlaScratchRequirements,
     glm4_mla_project,
+};
+pub use glm4_model::{
+    Glm4ModelPlan, Glm4ModelReaders, Glm4ModelScratch, Glm4ModelScratchRequirements,
+    Glm4ModelVectorLayout, glm4_model_next_token,
 };
 pub use glm4_sparse_layer::{
     Glm4SparseLayerPlan, Glm4SparseLayerReaders, Glm4SparseLayerScratch,

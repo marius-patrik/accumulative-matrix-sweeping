@@ -260,6 +260,12 @@ The reconstruction branch currently contains:
   cache, and scratch inventory before any weight read. Its two-layer fixture proves an incomplete later
   binding cannot start the dense layer, a late selected-expert failure rolls the already-committed dense
   KV prefix back, caller output remains untouched, and retry advances both layer prefixes together.
+- a native one-token GLM-4 causal-LM wrapper composing identity embedding-row access, the transactional
+  decoder stack, final RMSNorm, a mixed-storage LM head, and deterministic lowest-index argmax. Its
+  three-token-vocabulary fixture pins 144 bytes of non-layer scratch, rejects a short LM-head binding
+  before the embedding reader is touched, rolls both layer caches back when a non-finite LM-head value
+  fails after decoder execution, and retries successfully. The wrapper is manually bound; package plan
+  construction, tokenizer-backed generation, and sampling remain open.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal
@@ -293,7 +299,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 177 Python tests, and runs 50 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 177 Python tests, and runs 51 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
