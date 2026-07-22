@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +92,38 @@ def stage_huggingface_shard(
     the content-addressed file after independently verifying it, without reading the remote source.
     """
     root = _prepare_cache_root(cache_root)
+    publication_key = f"hf-shard-stage:{source.object_id}"
+    algorithm, hexdigest = source.content_hash.split(":", 1)
+    expected_chunk = root / "chunks" / f"{algorithm}-{hexdigest}.bin"
+    staging_name = hashlib.sha256(
+        f"{publication_key}\0{source.object_id}\0{0}\0{source.reader.size_bytes}".encode()
+    ).hexdigest()
+    expected_staging = root / ".staging" / f"{staging_name}.part"
+    for directory, expected in (
+        (root / "chunks", expected_chunk),
+        (root / ".staging", expected_staging),
+    ):
+        try:
+            if directory.is_symlink():
+                raise AmsError(
+                    ErrorCode.INVALID_PACKAGE,
+                    "Hugging Face shard-cache state directory is a symlink",
+                )
+            if directory.exists():
+                unexpected = [entry for entry in directory.iterdir() if entry != expected]
+                if unexpected:
+                    raise AmsError(
+                        ErrorCode.BROKER_VIOLATION,
+                        "Hugging Face shard cache already contains another source lease",
+                    )
+        except AmsError:
+            raise
+        except OSError as exc:
+            raise AmsError(
+                ErrorCode.IO_FAILURE,
+                "Hugging Face shard-cache state could not be inspected",
+                retriable=True,
+            ) from exc
     published = copy_range_atomic(
         source.reader,
         ByteRange(
@@ -100,7 +133,7 @@ def stage_huggingface_shard(
             checksum=source.content_hash,
         ),
         root,
-        f"hf-shard-stage:{source.object_id}",
+        publication_key,
         buffer_bytes=buffer_bytes,
     )
     descriptor = StorageObject(
@@ -119,15 +152,49 @@ def stage_huggingface_shard(
     return StagedHuggingFaceShard(root, published, local_source)
 
 
-def release_huggingface_shard(stage: StagedHuggingFaceShard) -> None:
-    """Idempotently remove only the exact content-addressed file from a marked cache root."""
+def validate_huggingface_shard_cache_empty(cache_root: Path) -> None:
+    """Prove a marked ephemeral cache retains no source or partial source object."""
+    if not cache_root.exists():
+        return
+    root = cache_root.resolve(strict=True)
+    _validate_marker(root)
     try:
-        root = stage.cache_root.resolve(strict=True)
+        for directory in (root / "chunks", root / ".staging"):
+            if directory.is_symlink():
+                raise AmsError(
+                    ErrorCode.INVALID_PACKAGE,
+                    "Hugging Face shard-cache state directory is a symlink",
+                )
+            if directory.exists() and next(directory.iterdir(), None) is not None:
+                raise AmsError(
+                    ErrorCode.BROKER_VIOLATION,
+                    "Hugging Face shard cache retained a source object",
+                )
+    except AmsError:
+        raise
+    except OSError as exc:
+        raise AmsError(
+            ErrorCode.IO_FAILURE,
+            "Hugging Face shard-cache state could not be inspected",
+            retriable=True,
+        ) from exc
+
+
+def release_huggingface_shard_source(
+    source: HuggingFaceShardSource,
+    cache_root: Path,
+    *,
+    declared_path: Path | None = None,
+) -> None:
+    """Idempotently remove one exact expected source object from a marked cache root."""
+    try:
+        if not cache_root.exists():
+            return
+        root = cache_root.resolve(strict=True)
         _validate_marker(root)
-        algorithm, hexdigest = stage.source.content_hash.split(":", 1)
+        algorithm, hexdigest = source.content_hash.split(":", 1)
         expected = (root / "chunks" / f"{algorithm}-{hexdigest}.bin").resolve(strict=False)
-        declared = stage.path.resolve(strict=False)
-        if declared != expected:
+        if declared_path is not None and declared_path.resolve(strict=False) != expected:
             raise AmsError(
                 ErrorCode.PLAN_INVALID,
                 "staged Hugging Face shard path is outside its exact cache slot",
@@ -140,7 +207,7 @@ def release_huggingface_shard(stage: StagedHuggingFaceShard) -> None:
                 "staged Hugging Face shard is not a regular file",
             )
         stat = expected.stat()
-        if stat.st_size != stage.source.reader.size_bytes:
+        if stat.st_size != source.reader.size_bytes:
             raise AmsError(
                 ErrorCode.INTEGRITY_FAILURE,
                 "staged Hugging Face shard size changed before release",
@@ -154,3 +221,12 @@ def release_huggingface_shard(stage: StagedHuggingFaceShard) -> None:
             "staged Hugging Face shard could not be released",
             retriable=True,
         ) from exc
+
+
+def release_huggingface_shard(stage: StagedHuggingFaceShard) -> None:
+    """Release a concrete staged lease through the exact-source cleanup boundary."""
+    release_huggingface_shard_source(
+        stage.source,
+        stage.cache_root,
+        declared_path=stage.path,
+    )

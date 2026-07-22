@@ -51,7 +51,9 @@ from ams.integrations.huggingface import (
 from ams.integrations.huggingface_staging import (
     StagedHuggingFaceShard,
     release_huggingface_shard,
+    release_huggingface_shard_source,
     stage_huggingface_shard,
+    validate_huggingface_shard_cache_empty,
 )
 from ams.integrations.safetensors import (
     SafetensorsHeader,
@@ -107,7 +109,9 @@ __all__ = [
     "parse_huggingface_shard_index",
     "parse_safetensors_header",
     "release_huggingface_shard",
+    "release_huggingface_shard_source",
     "stage_huggingface_shard",
     "validate_glm4_moe_lite_tensor_inventory",
     "validate_glm_tensor_inventory",
+    "validate_huggingface_shard_cache_empty",
 ]

@@ -94,7 +94,10 @@ content-addressed cache, reuse it after interruption without remote I/O, and rel
 cache slot after downstream publication. This is the bounded-disk primitive for eventual GLM-5.2
 shard-at-a-time conversion. A structural header catalog and deterministic progressive mixed plan now
 derive the same policy hash and target IDs as eager conversion without reading tensor payloads; the
-durable progressive conversion journal is still to be connected.
+durable progressive conversion state machine now records one immutable plan marker plus atomic
+per-shard and per-tensor records. It resumes mid-shard without remote rereads, verifies completed
+outputs before cleanup, and enforces a single source lease in a cache disjoint from package output.
+Final materialization into the existing manifest contract is the remaining conversion boundary.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,

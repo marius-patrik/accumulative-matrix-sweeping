@@ -10,6 +10,7 @@ from ams.integrations import (
     HuggingFaceShardSource,
     release_huggingface_shard,
     stage_huggingface_shard,
+    validate_huggingface_shard_cache_empty,
 )
 
 
@@ -61,6 +62,7 @@ def test_verified_shard_stage_restarts_without_remote_io_and_releases_exact_file
     release_huggingface_shard(restarted)
     assert not restarted.path.exists()
     release_huggingface_shard(restarted)
+    validate_huggingface_shard_cache_empty(cache_root)
 
 
 def test_bad_source_hash_never_publishes_a_staged_shard(tmp_path) -> None:
@@ -97,3 +99,24 @@ def test_release_refuses_path_or_cache_marker_drift(tmp_path) -> None:
         release_huggingface_shard(staged)
     assert caught.value.code is ErrorCode.INVALID_PACKAGE
     assert staged.path.exists()
+
+
+def test_cache_refuses_a_second_source_lease_until_the_first_is_released(tmp_path) -> None:
+    cache = tmp_path / "ephemeral-source"
+    first = stage_huggingface_shard(
+        source_for(RecordingReader(b"first-source")),
+        cache,
+        buffer_bytes=5,
+    )
+    second_reader = RecordingReader(b"second-source")
+    second = HuggingFaceShardSource(
+        "model-00002-of-00002.safetensors",
+        "source:00002",
+        digest(second_reader.payload),
+        second_reader,
+    )
+    with pytest.raises(AmsError) as caught:
+        stage_huggingface_shard(second, cache, buffer_bytes=5)
+    assert caught.value.code is ErrorCode.BROKER_VIOLATION
+    assert second_reader.reads == 0
+    assert first.path.exists()

@@ -163,6 +163,14 @@ The reconstruction branch currently contains:
   pins that structure, every assignment, codec hash, target ID, and source object in one deterministic
   plan hash. Its policy hash and target IDs exactly match the existing eager planner, removing two
   possible sources of truth before the durable state machine is added.
+- a granular progressive conversion journal and executor. One immutable plan marker is accompanied by
+  atomic verified-shard and published-tensor records, avoiding a model-wide journal rewrite for every
+  tensor. The persisted records are authoritative: a shard source is released only after its full
+  expected hash and exact local header are verified and every tensor output record is durable. Fault
+  tests cover interruption after the first tensor, failure after all outputs but before release,
+  plan/record disagreement, zero-remote-I/O restart, and two shards that never coexist in the source
+  cache. Completed outputs are rehashed before stale-cache cleanup. The cache rejects an unexpected
+  second lease and must be disjoint from both output and journal state.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -243,7 +251,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 144 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 149 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
