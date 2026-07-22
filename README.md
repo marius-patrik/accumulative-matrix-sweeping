@@ -70,6 +70,8 @@ Native sparse-MoE composition now streams router logits, applies noaux_tc select
 selected routed experts plus the shared expert, and commits output only after the whole token succeeds.
 Sparse causal attention likewise range-reads only selected offloaded K/V vectors, accepts reused
 IndexShare indices, and uses transactional caller-owned output scratch.
+The GLM-4-MoE-Lite path also has a native full causal attention primitive whose online softmax scans
+all causal K/V ranges with scratch independent of context length and never reads future-token vectors.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,

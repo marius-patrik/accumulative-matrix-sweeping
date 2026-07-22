@@ -7,6 +7,7 @@
 
 mod checked;
 mod error;
+mod full_attention;
 mod gated_mlp;
 mod glm;
 mod identity;
@@ -18,6 +19,10 @@ mod streamed_dsa;
 mod ternary;
 
 pub use error::{AmsError, ErrorCode};
+pub use full_attention::{
+    FullAttentionPlan, FullAttentionReaders, FullAttentionScratch,
+    FullAttentionScratchRequirements, FullAttentionShape, FullKvLayout, glm_full_attention,
+};
 pub use gated_mlp::{
     GatedMlpPlan, GatedMlpReaders, GatedMlpScratch, GatedMlpScratchRequirements, glm_gated_mlp,
 };
