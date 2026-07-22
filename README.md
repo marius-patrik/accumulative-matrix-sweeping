@@ -97,7 +97,9 @@ derive the same policy hash and target IDs as eager conversion without reading t
 durable progressive conversion state machine now records one immutable plan marker plus atomic
 per-shard and per-tensor records. It resumes mid-shard without remote rereads, verifies completed
 outputs before cleanup, and enforces a single source lease in a cache disjoint from package output.
-Final materialization into the existing manifest contract is the remaining conversion boundary.
+Only complete durable state can be promoted into the established verified catalog, mixed plan, and
+conversion journal. A differential fixture proves that progressive and eager conversion produce the
+same plan, journal, manifest, and manifest-last package publication.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,

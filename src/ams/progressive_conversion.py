@@ -13,10 +13,21 @@ from typing import Any
 
 from ams.canonical import canonical_json_bytes
 from ams.checked import checked_positive, checked_product
-from ams.descriptors import ByteRange, StorageObject, validate_digest
+from ams.conversion import ConversionItem, ConversionPlan
+from ams.descriptors import (
+    ByteRange,
+    ConversionJournal,
+    ConversionJournalEntry,
+    JournalEntryState,
+    StorageObject,
+    validate_digest,
+)
 from ams.errors import AmsError, ErrorCode
 from ams.integrations.huggingface import (
+    HuggingFaceCatalog,
     HuggingFaceHeaderCatalog,
+    HuggingFaceMixedPlan,
+    HuggingFaceMixedPlannedTensor,
     HuggingFaceProgressiveMixedPlan,
     HuggingFaceProgressiveShardPlan,
     HuggingFaceProgressiveTensorPlan,
@@ -199,6 +210,33 @@ class ProgressiveConversionJournalStore:
             max_bytes=self.max_record_bytes,
         )
 
+    def load_existing(self, plan: HuggingFaceProgressiveMixedPlan) -> None:
+        try:
+            if (
+                self.root.is_symlink()
+                or not self.root.is_dir()
+                or self.shard_directory.is_symlink()
+                or not self.shard_directory.is_dir()
+                or self.tensor_directory.is_symlink()
+                or not self.tensor_directory.is_dir()
+            ):
+                raise AmsError(
+                    ErrorCode.INVALID_PACKAGE,
+                    "progressive journal structure is missing or invalid",
+                )
+        except AmsError:
+            raise
+        except OSError as exc:
+            raise AmsError(
+                ErrorCode.IO_FAILURE,
+                "progressive journal structure could not be inspected",
+                retriable=True,
+            ) from exc
+        if _read_record(self.plan_path, max_bytes=self.max_record_bytes) != _plan_record(plan):
+            raise AmsError(
+                ErrorCode.PLAN_INVALID, "progressive plan marker disagrees with the plan"
+            )
+
     def shard_record(
         self,
         plan: HuggingFaceProgressiveMixedPlan,
@@ -360,6 +398,7 @@ class ProgressiveConversionJournalStore:
         self,
         plan: HuggingFaceProgressiveMixedPlan,
     ) -> ProgressiveConversionSnapshot:
+        self.load_existing(plan)
         shards: list[ProgressiveShardRecord] = []
         for shard in plan.shards:
             record = self.shard_record(plan, shard)
@@ -623,3 +662,82 @@ def execute_progressive_huggingface_mixed_conversion(
         release_huggingface_shard_source(staged.source, cache, declared_path=staged.path)
     validate_huggingface_shard_cache_empty(cache)
     return store.completed_snapshot(plan)
+
+
+def finalize_progressive_huggingface_mixed_conversion(
+    catalog: HuggingFaceHeaderCatalog,
+    plan: HuggingFaceProgressiveMixedPlan,
+    journal_root: Path,
+) -> tuple[HuggingFaceCatalog, HuggingFaceMixedPlan, ConversionJournal]:
+    """Promote only complete durable progressive state into the established manifest contracts."""
+    _validate_catalog_plan(catalog, plan)
+    snapshot = ProgressiveConversionJournalStore(journal_root).completed_snapshot(plan)
+    shard_records = {
+        (record.shard_name, record.object_id, record.content_hash, record.size_bytes)
+        for record in snapshot.shards
+    }
+    expected_shards = {
+        (shard.shard_name, shard.object_id, shard.content_hash, shard.size_bytes)
+        for shard in plan.shards
+    }
+    if shard_records != expected_shards or len(snapshot.shards) != len(plan.shards):
+        raise AmsError(ErrorCode.PLAN_INVALID, "progressive verified shard set is incomplete")
+    record_by_target = {record.target_chunk_id: record for record in snapshot.tensors}
+    if len(record_by_target) != len(snapshot.tensors) or set(record_by_target) != {
+        tensor.target_chunk_id for tensor in plan.tensors
+    }:
+        raise AmsError(ErrorCode.PLAN_INVALID, "progressive tensor record set is incomplete")
+
+    items: list[ConversionItem] = []
+    mixed_tensors: list[HuggingFaceMixedPlannedTensor] = []
+    for tensor in plan.tensors:
+        record = record_by_target[tensor.target_chunk_id]
+        if (
+            record.tensor_name != tensor.tensor.tensor_name
+            or record.shard_name != tensor.tensor.shard_name
+            or record.encoding is not tensor.encoding
+        ):
+            raise AmsError(ErrorCode.PLAN_INVALID, "progressive tensor record identity changed")
+        source_range = ByteRange(
+            tensor.tensor.object_id,
+            tensor.tensor.source_offset,
+            tensor.tensor.source_length,
+            record.source_checksum,
+        )
+        items.append(ConversionItem(tensor.target_chunk_id, source_range))
+        mixed_tensors.append(
+            HuggingFaceMixedPlannedTensor(
+                tensor=tensor.tensor,
+                target_chunk_id=tensor.target_chunk_id,
+                source_checksum=record.source_checksum,
+                encoding=tensor.encoding,
+                ternary_config=tensor.ternary_config,
+            )
+        )
+    conversion = ConversionPlan(plan.source_root, plan.policy_hash, tuple(items))
+    mixed_plan = HuggingFaceMixedPlan(conversion, plan.policy_hash, tuple(mixed_tensors))
+    journal_entries_by_target = {
+        item.target_chunk_id: ConversionJournalEntry(
+            source_range=item.source_range,
+            target_chunk_id=item.target_chunk_id,
+            state=JournalEntryState.PUBLISHED,
+            target_hash=record_by_target[item.target_chunk_id].target_hash,
+            encoded_bytes=record_by_target[item.target_chunk_id].encoded_bytes,
+        )
+        for item in conversion.items
+    }
+    journal = ConversionJournal(
+        "1.0.0",
+        plan.source_root,
+        plan.policy_hash,
+        tuple(journal_entries_by_target[item.target_chunk_id] for item in conversion.items),
+    )
+    verified_catalog = HuggingFaceCatalog(
+        source_root=catalog.source_root,
+        index_content_hash=catalog.index_content_hash,
+        index_metadata_hash=catalog.index_metadata_hash,
+        total_size=catalog.total_size,
+        tensors=catalog.tensors,
+        sources=catalog.sources,
+    )
+    return verified_catalog, mixed_plan, journal

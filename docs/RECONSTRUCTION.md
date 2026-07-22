@@ -171,6 +171,11 @@ The reconstruction branch currently contains:
   plan/record disagreement, zero-remote-I/O restart, and two shards that never coexist in the source
   cache. Completed outputs are rehashed before stale-cache cleanup. The cache rejects an unexpected
   second lease and must be disjoint from both output and journal state.
+- a completion-only promotion boundary from progressive state back into the established verified
+  `HuggingFaceCatalog`, `HuggingFaceMixedPlan`, and `ConversionJournal` contracts. Missing plan,
+  shard, or tensor records fail instead of manufacturing completion. A differential integration case
+  proves that eager and progressive paths yield identical verified catalogs, plans, journals,
+  manifests, and manifest-last published packages.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -251,7 +256,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 149 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 150 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

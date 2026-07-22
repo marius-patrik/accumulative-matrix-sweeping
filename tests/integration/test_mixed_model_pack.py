@@ -28,6 +28,10 @@ from ams.package import (
     build_huggingface_mixed_manifest,
     publish_manifest_last,
 )
+from ams.progressive_conversion import (
+    execute_progressive_huggingface_mixed_conversion,
+    finalize_progressive_huggingface_mixed_conversion,
+)
 from ams.storage import FileRangeStore
 
 
@@ -164,6 +168,72 @@ def test_progressive_plan_uses_headers_only_and_matches_eager_policy_identity(
     assert [tensor.target_chunk_id for tensor in progressive.tensors] == [
         tensor.target_chunk_id for tensor in eager.tensors
     ]
+
+
+def test_progressive_finalization_matches_the_eager_manifest_contract(tmp_path: Path) -> None:
+    index, source = prepare_source(tmp_path)
+    config = TernaryCodecConfig(group_size=5)
+    policy = assignments(config)
+
+    header_catalog = build_huggingface_header_catalog(index, (source,))
+    progressive_plan = build_huggingface_progressive_mixed_plan(header_catalog, policy)
+    progressive_root = tmp_path / "progressive-package"
+    journal_root = tmp_path / "progressive-journal"
+    execute_progressive_huggingface_mixed_conversion(
+        header_catalog,
+        progressive_plan,
+        progressive_root,
+        journal_root,
+        tmp_path / "progressive-source-cache",
+        buffer_bytes=13,
+    )
+    promoted_catalog, promoted_plan, promoted_journal = (
+        finalize_progressive_huggingface_mixed_conversion(
+            header_catalog,
+            progressive_plan,
+            journal_root,
+        )
+    )
+
+    eager_catalog = build_huggingface_catalog(index, (source,), buffer_bytes=19)
+    eager_plan = build_huggingface_mixed_plan(eager_catalog, policy, buffer_bytes=17)
+    eager_root = tmp_path / "eager-package"
+    eager_journal = execute_huggingface_mixed_conversion(
+        eager_catalog,
+        eager_plan,
+        eager_root,
+        eager_root / "conversion.journal.json",
+        verification_buffer_bytes=11,
+    )
+    assert promoted_catalog == eager_catalog
+    assert promoted_plan == eager_plan
+    assert promoted_journal == eager_journal
+
+    progressive_graph = graph_for(progressive_root)
+    eager_graph = graph_for(eager_root)
+    progressive_manifest = build_huggingface_mixed_manifest(
+        promoted_catalog,
+        promoted_plan,
+        promoted_journal,
+        progressive_graph,
+        architecture="SyntheticSparseDecoder",
+        model_configuration={"hidden_size": 5, "num_experts": 1},
+        default_dtype=DType.FLOAT32,
+        licenses=("test-only",),
+    )
+    eager_manifest = build_huggingface_mixed_manifest(
+        eager_catalog,
+        eager_plan,
+        eager_journal,
+        eager_graph,
+        architecture="SyntheticSparseDecoder",
+        model_configuration={"hidden_size": 5, "num_experts": 1},
+        default_dtype=DType.FLOAT32,
+        licenses=("test-only",),
+    )
+    assert progressive_manifest == eager_manifest
+    assert publish_manifest_last(progressive_root, progressive_manifest, buffer_bytes=7).is_file()
+    assert publish_manifest_last(eager_root, eager_manifest, buffer_bytes=7).is_file()
 
 
 def test_explicit_mixed_policy_converts_publishes_and_restarts_without_source(
