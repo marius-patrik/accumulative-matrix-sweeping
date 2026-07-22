@@ -522,6 +522,24 @@ impl GlmRouterPlan {
     pub const fn selected_count(self) -> usize {
         self.experts_per_token
     }
+
+    /// Total routed experts.
+    #[must_use]
+    pub const fn expert_count(self) -> usize {
+        self.expert_count
+    }
+
+    /// Number of expert groups.
+    #[must_use]
+    pub const fn group_count(self) -> usize {
+        self.group_count
+    }
+
+    /// Number of groups retained before expert selection.
+    #[must_use]
+    pub const fn top_groups(self) -> usize {
+        self.top_groups
+    }
 }
 
 /// Borrowed scratch for allocation-free GLM expert routing.
@@ -547,6 +565,14 @@ impl<'a> GlmRouterScratch<'a> {
             group_scores,
             selected_groups,
         }
+    }
+
+    /// Whether these caller-owned regions satisfy the immutable routing plan.
+    pub(crate) const fn admits(&self, plan: GlmRouterPlan) -> bool {
+        self.probabilities.len() >= plan.expert_count
+            && self.corrected.len() >= plan.expert_count
+            && self.group_scores.len() >= plan.group_count
+            && self.selected_groups.len() >= plan.top_groups
     }
 }
 

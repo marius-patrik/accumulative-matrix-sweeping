@@ -96,6 +96,43 @@ pub struct GatedMlpScratchRequirements {
     pub total_bytes: usize,
 }
 
+impl GatedMlpScratchRequirements {
+    /// Combine sequential MLP requirements for one reusable scratch allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PLAN_INVALID` if the combined byte count overflows.
+    pub fn union(self, other: Self) -> Result<Self, AmsError> {
+        let linear = self.linear.union(other.linear)?;
+        let intermediate_elements = self.intermediate_elements.max(other.intermediate_elements);
+        let intermediate_bytes = mul(
+            intermediate_elements,
+            size_of::<f64>(),
+            "gated MLP union intermediate bytes overflow",
+        )?;
+        let total_bytes = add(
+            linear.total_bytes,
+            intermediate_bytes,
+            "gated MLP union total bytes overflow",
+        )?;
+        Ok(Self {
+            linear,
+            intermediate_elements,
+            total_bytes,
+        })
+    }
+
+    /// Whether this allocation admits another sequential MLP requirement.
+    #[must_use]
+    pub const fn admits(self, other: Self) -> bool {
+        self.linear.encoded_bytes >= other.linear.encoded_bytes
+            && self.linear.decoded_elements >= other.linear.decoded_elements
+            && self.linear.accumulator_elements >= other.linear.accumulator_elements
+            && self.linear.local_bytes >= other.linear.local_bytes
+            && self.intermediate_elements >= other.intermediate_elements
+    }
+}
+
 /// Three immutable storage objects used by a gated MLP plan.
 pub struct GatedMlpReaders<'a> {
     gate: &'a dyn RangeReader,
@@ -127,6 +164,19 @@ impl<'a> GatedMlpScratch<'a> {
     #[must_use]
     pub const fn new(linear: LinearScratch<'a>, gate: &'a mut [f64], up: &'a mut [f64]) -> Self {
         Self { linear, gate, up }
+    }
+
+    /// Borrow the reusable linear region for a composed crate-internal operator.
+    pub(crate) const fn linear_mut(&mut self) -> &mut LinearScratch<'a> {
+        &mut self.linear
+    }
+
+    /// Whether these caller-owned regions satisfy one admitted MLP requirement.
+    pub(crate) const fn admits(&self, requirement: GatedMlpScratchRequirements) -> bool {
+        let per_intermediate = requirement.intermediate_elements / 2;
+        self.linear.admits(requirement.linear)
+            && self.gate.len() >= per_intermediate
+            && self.up.len() >= per_intermediate
     }
 }
 

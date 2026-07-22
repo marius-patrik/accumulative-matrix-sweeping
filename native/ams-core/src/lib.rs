@@ -12,6 +12,7 @@ mod glm;
 mod identity;
 mod linear;
 mod reader;
+mod sparse_moe;
 mod ternary;
 
 pub use error::{AmsError, ErrorCode};
@@ -28,6 +29,10 @@ pub use identity::{
 };
 pub use linear::{LinearPlan, LinearScratch, LinearScratchRequirements, stream_linear};
 pub use reader::{FileRangeReader, RangeReader, SliceReader};
+pub use sparse_moe::{
+    SparseMoeBindings, SparseMoePlan, SparseMoeScratch, SparseMoeScratchRequirements,
+    glm_sparse_moe,
+};
 pub use ternary::{
     TernaryConfig, TernaryLinearPlan, TernaryScratch, TernaryScratchRequirements,
     decode_ternary_group, stream_linear_ternary,

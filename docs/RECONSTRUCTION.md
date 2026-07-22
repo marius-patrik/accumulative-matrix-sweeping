@@ -144,6 +144,10 @@ The reconstruction branch currently contains:
   a materialized source-order reference, rejects non-finite inputs before storage reads, and accounts
   for a 136-byte logical high-water: 56 bytes of mixed-linear state plus two five-element FP64
   intermediates.
+- allocation-free native sparse-MoE composition for one token. Its 200-byte fixture proof streams the
+  router, applies deterministic noaux_tc routing, reads only the selected expert and the shared expert,
+  rejects insufficient scratch before the first router read, rejects incomplete expert inventories,
+  and leaves caller output unchanged when the shared expert fails after routed work has completed.
 - a deterministic batch-one miniature GLM-MoE-DSA prefill that composes embedding lookup, a dense
   decoder layer with a full DSA indexer, a sparse layer reusing those indices, causal attention, routed
   plus shared experts, residuals, final normalization, and LM-head logits. Its access-denial invariant
@@ -158,7 +162,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 106 Python tests, and runs 20 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 106 Python tests, and runs 22 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

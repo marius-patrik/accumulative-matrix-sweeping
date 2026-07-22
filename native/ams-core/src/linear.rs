@@ -152,6 +152,13 @@ impl<'a> LinearScratch<'a> {
             accumulators,
         }
     }
+
+    /// Whether these caller-owned regions satisfy one admitted requirement.
+    pub(crate) const fn admits(&self, requirement: LinearScratchRequirements) -> bool {
+        self.encoded.len() >= requirement.encoded_bytes
+            && self.decoded.len() >= requirement.decoded_elements
+            && self.accumulators.len() >= requirement.accumulator_elements
+    }
 }
 
 /// Execute one identity or ternary matrix-vector multiplication into caller output.
