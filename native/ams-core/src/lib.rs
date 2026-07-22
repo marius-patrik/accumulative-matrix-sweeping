@@ -14,6 +14,7 @@ mod linear;
 mod reader;
 mod sparse_attention;
 mod sparse_moe;
+mod streamed_dsa;
 mod ternary;
 
 pub use error::{AmsError, ErrorCode};
@@ -37,6 +38,10 @@ pub use sparse_attention::{
 pub use sparse_moe::{
     SparseMoeBindings, SparseMoePlan, SparseMoeScratch, SparseMoeScratchRequirements,
     glm_sparse_moe,
+};
+pub use streamed_dsa::{
+    StreamedDsaLayout, StreamedDsaScratch, StreamedDsaScratchRequirements, StreamedDsaShape,
+    StreamedDsaTopKPlan, glm_streamed_dsa_topk,
 };
 pub use ternary::{
     TernaryConfig, TernaryLinearPlan, TernaryScratch, TernaryScratchRequirements,

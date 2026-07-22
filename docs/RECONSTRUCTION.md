@@ -152,6 +152,10 @@ The reconstruction branch currently contains:
   fixture reads only selected vectors, never touches a declared future-token range, rejects noncausal
   indices before I/O, accepts the same indices for IndexShare reuse, and preserves caller output on a
   selected-value numeric failure. This is an operator proof, not yet a paged KV-cache implementation.
+- a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
+  `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
+  scratch before I/O, and differentially matches the context-sized semantic oracle across causal
+  prefixes. Managed scratch is independent of context length; required scan I/O is not.
 - a deterministic batch-one miniature GLM-MoE-DSA prefill that composes embedding lookup, a dense
   decoder layer with a full DSA indexer, a sparse layer reusing those indices, causal attention, routed
   plus shared experts, residuals, final normalization, and LM-head logits. Its access-denial invariant
@@ -166,7 +170,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 106 Python tests, and runs 24 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 106 Python tests, and runs 27 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
