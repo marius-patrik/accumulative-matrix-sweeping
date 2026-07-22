@@ -123,6 +123,10 @@ def stream_linear_identity(
         raise AmsError(ErrorCode.PLAN_INVALID, "linear input length does not match columns")
     if bias is not None and len(bias) != plan.rows:
         raise AmsError(ErrorCode.PLAN_INVALID, "linear bias length does not match rows")
+    if any(not math.isfinite(float(value)) for value in vector) or (
+        bias is not None and any(not math.isfinite(float(value)) for value in bias)
+    ):
+        raise AmsError(ErrorCode.NUMERIC_FAILURE, "identity linear input or bias is non-finite")
     weight_bytes = checked_mul(
         checked_mul(plan.rows, plan.columns, name="linear.weight_elements"),
         plan.item_bytes,
@@ -167,6 +171,8 @@ def stream_linear_identity(
                             "identity linear weight is non-finite",
                         )
                     accumulator += weight * float(vector[start + index])
+            if not math.isfinite(accumulator):
+                raise AmsError(ErrorCode.NUMERIC_FAILURE, "identity linear output is non-finite")
             emit(row, accumulator)
     finally:
         view.release()
@@ -259,6 +265,10 @@ def stream_linear_ternary(
         raise AmsError(ErrorCode.PLAN_INVALID, "ternary linear input length is invalid")
     if bias is not None and len(bias) != plan.rows:
         raise AmsError(ErrorCode.PLAN_INVALID, "ternary linear bias length is invalid")
+    if any(not math.isfinite(float(value)) for value in vector) or (
+        bias is not None and any(not math.isfinite(float(value)) for value in bias)
+    ):
+        raise AmsError(ErrorCode.NUMERIC_FAILURE, "ternary linear input or bias is non-finite")
     element_count = checked_mul(plan.rows, plan.columns, name="ternary_linear.elements")
     encoded_bytes = plan.config.encoded_size(element_count)
     if (
@@ -307,6 +317,8 @@ def stream_linear_ternary(
                     input_index = flat_index % plan.columns
                     accumulators[output_index] += values[local_index] * float(vector[input_index])
             for index, value in enumerate(accumulators):
+                if not math.isfinite(value):
+                    raise AmsError(ErrorCode.NUMERIC_FAILURE, "ternary linear output is non-finite")
                 emit(row_start + index, value)
     finally:
         record_view.release()

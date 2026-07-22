@@ -139,6 +139,11 @@ The reconstruction branch currently contains:
   outputs and exact scratch requirements for causal DSA selection and expert routing. Cross-language
   constants pin normalization and both RoPE layouts; malformed routing capacity is rejected during
   planning rather than surfacing as an internal execution failure.
+- a storage-polymorphic native linear boundary and composed GLM gated MLP. The fixture streams a
+  ternary gate, FP32 up projection, and BF16 down projection through one reusable scratch set, matches
+  a materialized source-order reference, rejects non-finite inputs before storage reads, and accounts
+  for a 136-byte logical high-water: 56 bytes of mixed-linear state plus two five-element FP64
+  intermediates.
 - a deterministic batch-one miniature GLM-MoE-DSA prefill that composes embedding lookup, a dense
   decoder layer with a full DSA indexer, a sparse layer reusing those indices, causal attention, routed
   plus shared experts, residuals, final normalization, and LM-head logits. Its access-denial invariant
@@ -153,7 +158,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 104 Python tests, and runs 16 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 106 Python tests, and runs 20 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

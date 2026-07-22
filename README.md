@@ -64,6 +64,8 @@ dependency-free Rust native core now implements the same codec and direct linear
 caller-owned scratch buffers, plus allocation-free identity linear execution directly from FP16,
 BF16, or FP32 storage. It also pins allocation-free RMSNorm, LayerNorm, SiLU, softmax, both GLM
 rotary layouts, causal DSA top-k, and noaux_tc expert routing with caller-owned outputs and scratch.
+The first native composed subgraph executes a mixed ternary/FP32/BF16 gated MLP from range readers
+with one reusable, explicitly accounted scratch set and no matrix materialization.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,
 fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
 expert tensor. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal

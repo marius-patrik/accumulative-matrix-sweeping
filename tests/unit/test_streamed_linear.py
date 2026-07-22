@@ -125,3 +125,13 @@ def test_streamed_identity_linear_supports_official_glm_float_dtypes(dtype: DTyp
         expected.append(accumulator)
     assert actual == expected
     assert reader.maximum_read + 8 <= plan.arena_bytes
+
+
+def test_streamed_identity_linear_rejects_nonfinite_input() -> None:
+    payload, _ = encode_identity([1.0], DType.FLOAT32)
+    reader = MemoryReader(payload)
+    plan = StreamedLinearPlan.create(rows=1, columns=1, weight_offset=0, arena_bytes=12)
+    with pytest.raises(AmsError) as caught:
+        stream_linear_identity(reader, plan, [float("nan")], lambda *_: None)
+    assert caught.value.code is ErrorCode.NUMERIC_FAILURE
+    assert reader.maximum_read == 0

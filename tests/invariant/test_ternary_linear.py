@@ -106,3 +106,19 @@ def test_ternary_linear_rejects_subminimum_arena() -> None:
             config=TernaryCodecConfig(group_size=5),
         )
     assert caught.value.code is ErrorCode.PREFLIGHT_NO_WORKING_SET
+
+
+def test_ternary_linear_rejects_nonfinite_input_before_storage_reads() -> None:
+    config = TernaryCodecConfig(group_size=5)
+    reader = MemoryReader(encode_weights([1.0], config))
+    plan = TernaryStreamedLinearPlan.create(
+        rows=1,
+        columns=1,
+        weight_offset=0,
+        arena_bytes=53,
+        config=config,
+    )
+    with pytest.raises(AmsError) as caught:
+        stream_linear_ternary(reader, plan, [float("inf")], lambda *_: None)
+    assert caught.value.code is ErrorCode.NUMERIC_FAILURE
+    assert reader.maximum_read == 0

@@ -135,6 +135,18 @@ impl IdentityLinearPlan {
     pub const fn reduction_tile(self) -> usize {
         self.reduction_tile
     }
+
+    /// Logical output rows.
+    #[must_use]
+    pub const fn rows(self) -> usize {
+        self.rows
+    }
+
+    /// Logical reduction columns.
+    #[must_use]
+    pub const fn columns(self) -> usize {
+        self.columns
+    }
 }
 
 fn f16_to_f32(word: u16) -> f32 {
@@ -237,13 +249,21 @@ pub fn stream_linear_identity<R, F>(
     mut emit: F,
 ) -> Result<(), AmsError>
 where
-    R: RangeReader,
+    R: RangeReader + ?Sized,
     F: FnMut(usize, f64) -> Result<(), AmsError>,
 {
     if input.len() != plan.columns || bias.is_some_and(|values| values.len() != plan.rows) {
         return Err(AmsError::new(
             ErrorCode::PlanInvalid,
             "identity linear input or bias shape is invalid",
+        ));
+    }
+    if input.iter().any(|value| !value.is_finite())
+        || bias.is_some_and(|values| values.iter().any(|value| !value.is_finite()))
+    {
+        return Err(AmsError::new(
+            ErrorCode::NumericFailure,
+            "identity linear input or bias is non-finite",
         ));
     }
     if scratch.encoded.len() < plan.scratch.encoded_bytes {
@@ -285,6 +305,12 @@ where
                 let weight = decode_identity(&scratch.encoded[..byte_count], index, plan.dtype)?;
                 accumulator += f64::from(weight) * input[start + index];
             }
+        }
+        if !accumulator.is_finite() {
+            return Err(AmsError::new(
+                ErrorCode::NumericFailure,
+                "identity linear output is non-finite",
+            ));
         }
         emit(row, accumulator)?;
     }
@@ -353,6 +379,26 @@ mod tests {
         let mut scratch = IdentityScratch::new(&mut encoded_scratch);
         let error =
             stream_linear_identity(&reader, plan, &[1.0], None, &mut scratch, |_, _| Ok(())).err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::NumericFailure));
+        Ok(())
+    }
+
+    #[test]
+    fn identity_linear_rejects_nonfinite_input() -> Result<(), AmsError> {
+        let payload = 1.0f32.to_le_bytes();
+        let reader = SliceReader::new(&payload);
+        let plan = IdentityLinearPlan::from_arena(1, 1, 0, 12, IdentityDType::Float32)?;
+        let mut encoded_scratch = [0u8; 4];
+        let mut scratch = IdentityScratch::new(&mut encoded_scratch);
+        let error = stream_linear_identity(
+            &reader,
+            plan,
+            &[f64::NAN],
+            None,
+            &mut scratch,
+            |_, _| Ok(()),
+        )
+        .err();
         assert_eq!(error.map(AmsError::code), Some(ErrorCode::NumericFailure));
         Ok(())
     }

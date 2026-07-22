@@ -220,6 +220,18 @@ impl TernaryLinearPlan {
     pub const fn encoded_bytes(self) -> usize {
         self.encoded_bytes
     }
+
+    /// Logical output rows.
+    #[must_use]
+    pub const fn rows(self) -> usize {
+        self.rows
+    }
+
+    /// Logical reduction columns.
+    #[must_use]
+    pub const fn columns(self) -> usize {
+        self.columns
+    }
 }
 
 /// Decode one complete group into caller-owned FP32 scratch.
@@ -318,13 +330,21 @@ pub fn stream_linear_ternary<R, F>(
     mut emit: F,
 ) -> Result<(), AmsError>
 where
-    R: RangeReader,
+    R: RangeReader + ?Sized,
     F: FnMut(usize, f64) -> Result<(), AmsError>,
 {
     if input.len() != plan.columns || bias.is_some_and(|values| values.len() != plan.rows) {
         return Err(AmsError::new(
             ErrorCode::PlanInvalid,
             "ternary linear input or bias shape is invalid",
+        ));
+    }
+    if input.iter().any(|value| !value.is_finite())
+        || bias.is_some_and(|values| values.iter().any(|value| !value.is_finite()))
+    {
+        return Err(AmsError::new(
+            ErrorCode::NumericFailure,
+            "ternary linear input or bias is non-finite",
         ));
     }
     let required = plan.scratch;
@@ -400,6 +420,12 @@ where
             }
         }
         for (index, &value) in scratch.accumulators[..row_count].iter().enumerate() {
+            if !value.is_finite() {
+                return Err(AmsError::new(
+                    ErrorCode::NumericFailure,
+                    "ternary linear output is non-finite",
+                ));
+            }
             emit(row_start + index, value)?;
         }
         row_start += row_count;
@@ -491,6 +517,32 @@ mod tests {
             error.map(AmsError::code),
             Some(ErrorCode::PreflightNoWorkingSet)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ternary_linear_rejects_nonfinite_input() -> Result<(), AmsError> {
+        let payload = known_record();
+        let reader = SliceReader::new(&payload);
+        let plan = TernaryLinearPlan::from_arena(1, 5, 0, 33, TernaryConfig::new(5)?)?;
+        let mut encoded_scratch = [0u8; 5];
+        let mut decoded_scratch = [0.0f32; 5];
+        let mut accumulators = [0.0f64; 1];
+        let mut scratch = TernaryScratch::new(
+            &mut encoded_scratch,
+            &mut decoded_scratch,
+            &mut accumulators,
+        );
+        let error = stream_linear_ternary(
+            &reader,
+            plan,
+            &[1.0, 2.0, f64::INFINITY, 4.0, 5.0],
+            None,
+            &mut scratch,
+            |_, _| Ok(()),
+        )
+        .err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::NumericFailure));
         Ok(())
     }
 }
