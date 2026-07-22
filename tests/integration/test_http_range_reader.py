@@ -14,6 +14,7 @@ class FakeResponse:
         payload: bytes,
         *,
         content_range: str,
+        content_length: int | None = None,
         status: int = 206,
         final_url: str = "https://cdn.example.test/object",
     ) -> None:
@@ -22,7 +23,7 @@ class FakeResponse:
         self.status = status
         self.final_url = final_url
         self.headers = {
-            "Content-Length": str(len(payload)),
+            "Content-Length": str(len(payload) if content_length is None else content_length),
             "Content-Range": content_range,
         }
 
@@ -129,19 +130,20 @@ def test_https_reader_retries_only_bounded_transport_failures() -> None:
     opener = FakeOpener(
         [
             transient,
+            FakeResponse(b"a", content_range="bytes 0-1/2", content_length=2),
             FakeResponse(b"ab", content_range="bytes 0-1/2"),
         ]
     )
     reader = HttpRangeReader(
         "https://models.example.test/object",
         2,
-        max_retries=1,
+        max_retries=2,
         _opener=opener,
     )
     destination = bytearray(2)
     reader.read_into(0, destination)
     assert destination == b"ab"
-    assert len(opener.requests) == 2
+    assert len(opener.requests) == 3
 
     permanent = HTTPError(
         "https://models.example.test/object",

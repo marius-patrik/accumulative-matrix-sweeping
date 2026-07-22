@@ -10,8 +10,11 @@ from ams.conversion import execute_multi_source_identity_conversion
 from ams.descriptors import StorageObject
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
+    HuggingFaceCatalogPolicy,
     HuggingFaceIndexLimits,
     HuggingFaceShardSource,
+    HuggingFaceTotalSizeSemantics,
+    audit_huggingface_headers,
     build_huggingface_catalog,
     build_huggingface_identity_plan,
     parse_huggingface_shard_index,
@@ -183,3 +186,68 @@ def test_catalog_rejects_shard_hash_mismatch_before_header_use(tmp_path: Path) -
     with pytest.raises(AmsError) as caught:
         build_huggingface_catalog(index, (corrupted_identity, sources[1]))
     assert caught.value.code is ErrorCode.INTEGRITY_FAILURE
+
+
+def test_header_audit_proves_structure_without_claiming_payload_hashes(tmp_path: Path) -> None:
+    index_payload, sources, total_size = create_sharded_fixture(tmp_path)
+    index = parse_huggingface_shard_index(index_payload)
+    first = sources[0]
+    unverified_identity = HuggingFaceShardSource(
+        first.shard_name,
+        first.object_id,
+        "sha256:" + "0" * 64,
+        first.reader,
+    )
+    audit = audit_huggingface_headers(index, (unverified_identity, sources[1]))
+
+    assert audit.shard_count == 2
+    assert audit.tensor_count == 3
+    assert audit.tensor_elements == 27
+    assert audit.tensor_bytes == total_size
+    assert audit.source_file_bytes == sum(source.reader.size_bytes for source in sources)
+    assert audit.prefix_and_header_bytes == audit.source_file_bytes - total_size
+    assert audit.dtype_counts == (("F32", 2), ("I16", 1))
+
+
+def test_nonstandard_element_count_semantics_require_the_exact_index_pin(
+    tmp_path: Path,
+) -> None:
+    index_payload, sources, _ = create_sharded_fixture(tmp_path)
+    raw = json.loads(index_payload)
+    raw["metadata"]["total_size"] = 27
+    index = parse_huggingface_shard_index(json.dumps(raw, separators=(",", ":")).encode())
+
+    with pytest.raises(AmsError, match="total_size"):
+        build_huggingface_catalog(index, sources)
+    with pytest.raises(AmsError, match="require an exact index hash"):
+        HuggingFaceCatalogPolicy(HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS)
+    wrong_pin = HuggingFaceCatalogPolicy(
+        HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS,
+        digest(b"different-index"),
+    )
+    forbidden_sources = tuple(
+        HuggingFaceShardSource(
+            source.shard_name,
+            source.object_id,
+            source.content_hash,
+            ForbiddenReader(source.reader.size_bytes),
+        )
+        for source in sources
+    )
+    with pytest.raises(AmsError, match="does not match the pinned"):
+        build_huggingface_catalog(index, forbidden_sources, policy=wrong_pin)
+
+    pinned = HuggingFaceCatalogPolicy(
+        HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS,
+        index.content_hash,
+    )
+    catalog = build_huggingface_catalog(index, sources, policy=pinned)
+    assert catalog.total_size == 78
+
+
+class ForbiddenReader:
+    def __init__(self, size_bytes: int) -> None:
+        self.size_bytes = size_bytes
+
+    def read_into(self, _offset: int, _destination) -> None:
+        raise AssertionError("preflight failure performed source I/O")

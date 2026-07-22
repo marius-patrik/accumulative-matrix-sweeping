@@ -53,7 +53,7 @@ checked byte arithmetic, stable typed errors, immutable package and conversion-j
 canonical JSON, atomic resource-vector admission, a bounded synchronous file store, a hardened
 safetensors metadata boundary, restart-safe content-addressed range publication, and a scalar streamed
 FP16/BF16/FP32 linear oracle. The experimental storage path also normalizes multi-shard Hugging Face
-indexes,
+indexes and provides an exact-206, identity-encoded HTTPS range reader for immutable public shards,
 publishes schema-valid AMS manifests last, and implements a deterministic grouped ternary reference
 codec with crash-recoverable transformed chunks. An explicit mixed policy can retain sensitive tensors
 exactly while ternarizing selected tensors in the same journaled, schema-valid package. It is not yet a
@@ -85,6 +85,10 @@ Completions requests into one typed model contract and emits byte-exact text, re
 usage, error, and SSE terminal frames. It is deliberately backend-injected: no fixture response is
 presented as model inference, and unsupported persistence, hosted-tool, and provider fields fail during
 request preflight.
+That reader has audited every header in the pinned 48-shard GLM-4.7-Flash checkpoint without
+downloading tensor payloads: all 9,703 index mappings are present and contiguous. The provider's
+nonstandard `total_size` is proven to count elements, and that interpretation is accepted only when
+the exact pinned index hash is supplied; ordinary Hugging Face catalogs still require byte totals.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,

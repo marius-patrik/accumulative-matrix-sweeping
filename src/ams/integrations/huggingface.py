@@ -10,7 +10,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from ams.canonical import canonical_json_bytes
-from ams.checked import checked_add, checked_uint
+from ams.checked import checked_add, checked_product, checked_uint
 from ams.codecs import TernaryCodecConfig
 from ams.conversion import ConversionItem, ConversionPlan
 from ams.descriptors import ByteRange, DType, validate_digest, validate_identifier
@@ -81,6 +81,57 @@ class HuggingFaceCatalog:
     total_size: int
     tensors: tuple[HuggingFaceCatalogTensor, ...]
     sources: tuple[HuggingFaceShardSource, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceHeaderAudit:
+    """Structural evidence obtained without reading or hashing tensor payloads."""
+
+    index_content_hash: str
+    shard_count: int
+    tensor_count: int
+    declared_total_size: int
+    tensor_elements: int
+    tensor_bytes: int
+    source_file_bytes: int
+    prefix_and_header_bytes: int
+    dtype_counts: tuple[tuple[str, int], ...]
+
+
+class HuggingFaceTotalSizeSemantics(StrEnum):
+    TENSOR_BYTES = "tensor_bytes"
+    TENSOR_ELEMENTS = "tensor_elements"
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceCatalogPolicy:
+    """Interpret provider metadata, pinning every nonstandard interpretation to one index."""
+
+    total_size_semantics: HuggingFaceTotalSizeSemantics = HuggingFaceTotalSizeSemantics.TENSOR_BYTES
+    expected_index_content_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "total_size_semantics",
+            HuggingFaceTotalSizeSemantics(self.total_size_semantics),
+        )
+        if self.total_size_semantics is HuggingFaceTotalSizeSemantics.TENSOR_BYTES:
+            if self.expected_index_content_hash is not None:
+                raise AmsError(
+                    ErrorCode.PLAN_INVALID,
+                    "standard Hugging Face size semantics cannot carry an exception pin",
+                )
+            return
+        if self.expected_index_content_hash is None:
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "nonstandard Hugging Face size semantics require an exact index hash",
+            )
+        validate_digest(
+            self.expected_index_content_hash,
+            name="huggingface.expected_index_content_hash",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,23 +291,41 @@ def _verify_shard(source: HuggingFaceShardSource, *, buffer_bytes: int) -> Safet
     return parse_safetensors_header(source.reader)
 
 
-def build_huggingface_catalog(
+def _inspect_huggingface_headers(
     index: HuggingFaceShardIndex,
     sources: tuple[HuggingFaceShardSource, ...],
     *,
-    buffer_bytes: int = 1024 * 1024,
-) -> HuggingFaceCatalog:
-    """Cross-check the provider index, immutable shard hashes, and normalized headers."""
+    verify_hashes: bool,
+    buffer_bytes: int,
+) -> tuple[tuple[HuggingFaceCatalogTensor, ...], HuggingFaceHeaderAudit]:
     source_by_name = {source.shard_name: source for source in sources}
     if len(source_by_name) != len(sources) or set(source_by_name) != set(index.shard_names):
         raise AmsError(ErrorCode.INVALID_PACKAGE, "Hugging Face shard source set is incomplete")
     index_by_tensor = {entry.tensor_name: entry.shard_name for entry in index.entries}
     tensors: list[HuggingFaceCatalogTensor] = []
     observed_names: set[str] = set()
-    total_size = 0
+    tensor_bytes = 0
+    tensor_elements = 0
+    source_file_bytes = 0
+    prefix_and_header_bytes = 0
+    dtype_counts: dict[str, int] = {}
     for shard_name in index.shard_names:
         source = source_by_name[shard_name]
-        header = _verify_shard(source, buffer_bytes=buffer_bytes)
+        header = (
+            _verify_shard(source, buffer_bytes=buffer_bytes)
+            if verify_hashes
+            else parse_safetensors_header(source.reader)
+        )
+        source_file_bytes = checked_add(
+            source_file_bytes,
+            source.reader.size_bytes,
+            name="huggingface.source_file_bytes",
+        )
+        prefix_and_header_bytes = checked_add(
+            prefix_and_header_bytes,
+            header.data_offset,
+            name="huggingface.prefix_and_header_bytes",
+        )
         for tensor in header.tensors:
             if tensor.source_name in observed_names:
                 raise AmsError(ErrorCode.INVALID_PACKAGE, "tensor appears in more than one shard")
@@ -266,7 +335,20 @@ def build_huggingface_catalog(
                     "Hugging Face index and shard tensor mapping disagree",
                 )
             observed_names.add(tensor.source_name)
-            total_size = checked_add(total_size, tensor.data_length, name="huggingface.total_size")
+            tensor_bytes = checked_add(
+                tensor_bytes,
+                tensor.data_length,
+                name="huggingface.tensor_bytes",
+            )
+            tensor_elements = checked_add(
+                tensor_elements,
+                checked_product(
+                    tensor.shape,
+                    name=f"huggingface.{tensor.source_name}.elements",
+                ),
+                name="huggingface.tensor_elements",
+            )
+            dtype_counts[tensor.source_dtype] = dtype_counts.get(tensor.source_dtype, 0) + 1
             tensors.append(
                 HuggingFaceCatalogTensor(
                     tensor_name=tensor.source_name,
@@ -281,11 +363,67 @@ def build_huggingface_catalog(
             )
     if observed_names != set(index_by_tensor):
         raise AmsError(ErrorCode.INVALID_PACKAGE, "Hugging Face index references absent tensors")
-    if total_size != index.total_size:
+    normalized_tensors = tuple(sorted(tensors, key=lambda tensor: tensor.tensor_name))
+    audit = HuggingFaceHeaderAudit(
+        index_content_hash=index.content_hash,
+        shard_count=len(sources),
+        tensor_count=len(normalized_tensors),
+        declared_total_size=index.total_size,
+        tensor_elements=tensor_elements,
+        tensor_bytes=tensor_bytes,
+        source_file_bytes=source_file_bytes,
+        prefix_and_header_bytes=prefix_and_header_bytes,
+        dtype_counts=tuple(sorted(dtype_counts.items())),
+    )
+    return normalized_tensors, audit
+
+
+def audit_huggingface_headers(
+    index: HuggingFaceShardIndex,
+    sources: tuple[HuggingFaceShardSource, ...],
+) -> HuggingFaceHeaderAudit:
+    """Cross-check every shard header and index mapping without claiming payload integrity."""
+    _, audit = _inspect_huggingface_headers(
+        index,
+        sources,
+        verify_hashes=False,
+        buffer_bytes=1,
+    )
+    return audit
+
+
+def build_huggingface_catalog(
+    index: HuggingFaceShardIndex,
+    sources: tuple[HuggingFaceShardSource, ...],
+    *,
+    buffer_bytes: int = 1024 * 1024,
+    policy: HuggingFaceCatalogPolicy | None = None,
+) -> HuggingFaceCatalog:
+    """Cross-check the provider index, immutable shard hashes, and normalized headers."""
+    policy = policy or HuggingFaceCatalogPolicy()
+    if (
+        policy.total_size_semantics is HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS
+        and policy.expected_index_content_hash != index.content_hash
+    ):
+        raise AmsError(
+            ErrorCode.PLAN_INVALID,
+            "Hugging Face index does not match the pinned size-semantics exception",
+        )
+    tensors, audit = _inspect_huggingface_headers(
+        index,
+        sources,
+        verify_hashes=True,
+        buffer_bytes=buffer_bytes,
+    )
+    if policy.total_size_semantics is HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS:
+        observed_declared_size = audit.tensor_elements
+    else:
+        observed_declared_size = audit.tensor_bytes
+    if observed_declared_size != index.total_size:
         raise AmsError(
             ErrorCode.INVALID_PACKAGE,
             "Hugging Face total_size does not match tensor storage",
-            evidence={"actual": total_size, "declared": index.total_size},
+            evidence={"actual": observed_declared_size, "declared": index.total_size},
         )
     source_root_payload = {
         "index": index.content_hash,
@@ -299,8 +437,8 @@ def build_huggingface_catalog(
         source_root=source_root,
         index_content_hash=index.content_hash,
         index_metadata_hash=index.metadata_hash,
-        total_size=total_size,
-        tensors=tuple(sorted(tensors, key=lambda tensor: tensor.tensor_name)),
+        total_size=audit.tensor_bytes,
+        tensors=tensors,
         sources=tuple(sorted(sources, key=lambda source: source.shard_name)),
     )
 

@@ -138,12 +138,19 @@ The reconstruction branch currently contains:
   inference layers, and a separately marked 212-tensor MTP layer, including its private embedding and
   shared head. The 48-shard provider mapping declares 31,221,488,576 as `total_size`; the pinned name
   set has SHA-256 `23321d795f0b797ab951613b86cf4d02008e4057b446055fcc2b0265b1f3db3d`.
-- a representative immutable GLM-4.7-Flash shard-header audit. Hub and local size and SHA-256 agree for
-  shard 2. The strict bounded parser accepts its 25,144-byte header, contiguous 1,270,622,976-byte data
-  buffer, and all 206 tensors; those names exactly match the pinned index mapping. The shard contains
-  205 BF16 tensors and the 64-element FP32 expert-correction bias. Its encoded data divided by two is
-  635,311,488, while its true element count is 635,311,424, disproving a literal element-count reading
-  of the anomalous index total for this shard and supporting the provider-half-byte-count hypothesis.
+- a credential-free, bounded HTTPS range reader that accepts only exact `206` responses with identity
+  encoding and matching length/range/object-size metadata. Redirect, status, size, and encoding drift
+  fail closed; transport retries are explicitly classified and capped. It was live-probed against an
+  immutable, previously undownloaded GLM-4.7-Flash shard using only its prefix and header.
+- a complete immutable GLM-4.7-Flash header audit across all 48 shards. The strict parser proves all
+  9,703 index mappings, contiguous ranges, 62,442,983,168 tensor bytes, 31,221,488,576 tensor elements,
+  62,444,175,504 source-file bytes, and 1,192,336 prefix/header bytes. The checkpoint contains 9,656
+  BF16 tensors and 47 FP32 64-element expert-correction biases. The provider's declared
+  `total_size = 31,221,488,576` is therefore exactly an element count; tensor bytes exceed twice that
+  declaration by 6,016 bytes, exactly the extra two bytes for each of the 3,008 FP32 elements. The
+  model-scoped catalog policy permits this interpretation only with the exact pinned index hash;
+  standard catalogs remain byte-exact. This is structural header evidence, not full payload integrity:
+  only shard 2 has also been downloaded and independently SHA-256 verified.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -224,7 +231,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 133 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 140 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
@@ -275,14 +282,10 @@ non-overlapping coverage of the remaining data buffer. See the
   at its own safe points before cancellation latency can be claimed.
 - Quality and throughput thresholds remain unset until GLM-4.7-Flash produces a reproducible baseline.
   Correctness, bounded residency, and protocol semantics are hard gates regardless of speed.
-- The pinned GLM-4.7-Flash index declares `total_size = 31,221,488,576`, but the immutable Hub revision
-  reports 62,444,175,504 bytes across its 48 safetensors objects. Twice the declaration is
-  62,442,977,152 bytes, leaving 1,198,352 bytes for safetensors headers and file overhead. This strongly
-  indicates that the provider divided encoded tensor bytes by two where the generic index contract
-  expects bytes. The audited second shard is consistent with this diagnosis and, because it includes an
-  FP32 tensor, rules out literal element count as the exact meaning. AMS records the anomaly but does not
-  waive byte reconciliation: the current catalog builder will reject it until all remaining shard
-  headers independently prove every tensor range and an explicit, model-scoped normalization is reviewed.
+- The pinned GLM-4.7-Flash index uses element-count rather than byte-count `total_size` semantics. All
+  48 headers now prove this exactly, and the catalog has a reviewed exception that is unusable unless
+  the caller supplies the pinned index content hash. This removes the metadata blocker but does not
+  waive integrity: a publishable catalog still hashes every complete source shard before conversion.
 - Transformers 5.12.0 skips several GLM-MoE-DSA equivalence paths because hard DSA top-k can change
   under small numerical or batching differences, and its assisted/static-cache tests are disabled for
   index-mask incompatibilities. AMS must establish its own deterministic index-ranking, cache, and MTP

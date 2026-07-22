@@ -189,6 +189,10 @@ class HttpRangeReader:
                         destination,
                         expected_size=expected_size,
                     )
+            except AmsError as exc:
+                if exc.retriable and attempt < max_retries:
+                    continue
+                raise
             except HTTPError as exc:
                 retriable = exc.code in _RETRIABLE_STATUS
                 exc.close()
