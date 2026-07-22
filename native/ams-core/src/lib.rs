@@ -12,6 +12,7 @@ mod gated_mlp;
 mod glm;
 mod glm4_mla;
 mod identity;
+mod kv_cache;
 mod linear;
 mod reader;
 mod sparse_attention;
@@ -39,6 +40,7 @@ pub use identity::{
     IdentityDType, IdentityLinearPlan, IdentityScratch, IdentityScratchRequirements,
     read_identity_vector, stream_linear_identity,
 };
+pub use kv_cache::{KvCache, KvCachePlan, KvCacheRequirements, KvCacheView};
 pub use linear::{LinearPlan, LinearScratch, LinearScratchRequirements, stream_linear};
 pub use reader::{FileRangeReader, RangeReader, SliceReader};
 pub use sparse_attention::{
