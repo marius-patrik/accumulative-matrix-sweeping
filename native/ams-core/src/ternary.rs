@@ -122,6 +122,7 @@ pub struct TernaryLinearPlan {
     weight_offset: u64,
     output_row_tile: usize,
     encoded_bytes: usize,
+    weight_end: u64,
     config: TernaryConfig,
     scratch: TernaryScratchRequirements,
 }
@@ -182,7 +183,7 @@ impl TernaryLinearPlan {
             "ternary total scratch overflow",
         )?;
         let encoded_u64 = usize_to_u64(encoded_bytes, "ternary encoded size exceeds u64")?;
-        add_u64(
+        let weight_end = add_u64(
             weight_offset,
             encoded_u64,
             "ternary weight range overflows u64",
@@ -193,6 +194,7 @@ impl TernaryLinearPlan {
             weight_offset,
             output_row_tile,
             encoded_bytes,
+            weight_end,
             config,
             scratch: TernaryScratchRequirements {
                 encoded_bytes: record_bytes,
@@ -219,6 +221,12 @@ impl TernaryLinearPlan {
     #[must_use]
     pub const fn encoded_bytes(self) -> usize {
         self.encoded_bytes
+    }
+
+    /// Minimum reader length required by this encoded matrix range.
+    #[must_use]
+    pub const fn reader_end(self) -> u64 {
+        self.weight_end
     }
 
     /// Logical output rows.

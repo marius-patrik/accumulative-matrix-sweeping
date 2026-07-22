@@ -34,14 +34,40 @@ def test_rms_and_layer_norm_use_explicit_reference_reductions() -> None:
     assert sum(value * value for value in normalized) / 4 == pytest.approx(1.0, abs=1e-6)
 
 
-def test_rope_layouts_are_distinct_and_preserve_squared_norm() -> None:
+def test_interleaved_rope_matches_provider_half_split_output_for_four_dimensions() -> None:
     values = (1.0, 2.0, 3.0, 4.0)
     interleaved = apply_rope_interleaved_reference(values, position=7, theta=10000.0)
     half_split = apply_rope_half_split_reference(values, position=7, theta=10000.0)
+    expected = (
+        1.0 * math.cos(7.0) - 2.0 * math.sin(7.0),
+        3.0 * math.cos(0.07) - 4.0 * math.sin(0.07),
+        2.0 * math.cos(7.0) + 1.0 * math.sin(7.0),
+        4.0 * math.cos(0.07) + 3.0 * math.sin(0.07),
+    )
+    assert interleaved == pytest.approx(expected, rel=0, abs=2e-15)
     assert interleaved != half_split
     expected_norm = sum(value * value for value in values)
     assert sum(value * value for value in interleaved) == pytest.approx(expected_norm, abs=1e-12)
     assert sum(value * value for value in half_split) == pytest.approx(expected_norm, abs=1e-12)
+
+
+def test_interleaved_rope_two_dimensions_preserve_provider_coincidence() -> None:
+    values = (1.0, 2.0)
+    expected = (
+        values[0] * math.cos(7.0) - values[1] * math.sin(7.0),
+        values[1] * math.cos(7.0) + values[0] * math.sin(7.0),
+    )
+    assert apply_rope_interleaved_reference(values, position=7, theta=10000.0) == pytest.approx(
+        expected,
+        rel=0,
+        abs=2e-15,
+    )
+
+
+def test_interleaved_rope_rejects_an_odd_dimension() -> None:
+    with pytest.raises(AmsError) as caught:
+        apply_rope_interleaved_reference((1.0, 2.0, 3.0), position=7, theta=10000.0)
+    assert caught.value.code is ErrorCode.PLAN_INVALID
 
 
 def test_dsa_topk_is_causal_and_breaks_equal_scores_by_key_index() -> None:

@@ -194,7 +194,7 @@ fn rope_angle(
     Ok(position / theta.powf(2.0 * pair_index / dimension))
 }
 
-/// Apply the main MLA interleaved-pair rotary layout.
+/// Apply `RoPE` to interleaved input pairs and emit provider-compatible half-split output.
 ///
 /// # Errors
 ///
@@ -214,8 +214,8 @@ pub fn glm_rope_interleaved(
         let source_offset = pair_index * 2;
         let left = values[source_offset];
         let right = values[source_offset + 1];
-        output[source_offset] = left * cosine - right * sine;
-        output[source_offset + 1] = right * cosine + left * sine;
+        output[pair_index] = left * cosine - right * sine;
+        output[pair_count + pair_index] = right * cosine + left * sine;
     }
     if output.iter().any(|value| !value.is_finite()) {
         return Err(AmsError::new(
@@ -828,8 +828,8 @@ mod tests {
             &interleaved,
             &[
                 -0.560_070_943_094_273_5,
-                2.164_791_107_405_398_5,
                 2.712_881_611_409_707_6,
+                2.164_791_107_405_398_5,
                 4.200_032_543_025_717,
             ],
             2e-15,

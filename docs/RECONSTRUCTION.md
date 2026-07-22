@@ -139,9 +139,11 @@ The reconstruction branch currently contains:
   shared head. The 48-shard provider mapping declares 31,221,488,576 as `total_size`; the pinned name
   set has SHA-256 `23321d795f0b797ab951613b86cf4d02008e4057b446055fcc2b0265b1f3db3d`.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
-  softmax, interleaved MLA RoPE, half-split indexer RoPE, causal DSA top-k with key-index tie breaking,
-  and sigmoid/noaux_tc grouped expert routing. Correction bias affects expert choice but not mixture
-  weight, matching the pinned reference order.
+  softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
+  components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
+  sigmoid/noaux_tc grouped expert routing. Correction bias affects expert choice but not mixture
+  weight, matching the pinned reference order. A four-dimensional provider differential, the
+  two-dimensional permutation coincidence, and odd-dimension rejection pin the MLA layout.
 - allocation-free native implementations of those same GLM control operators with caller-owned
   outputs and exact scratch requirements for causal DSA selection and expert routing. Cross-language
   constants pin normalization and both RoPE layouts; malformed routing capacity is rejected during
@@ -164,6 +166,12 @@ The reconstruction branch currently contains:
   managed scratch is independent of context length while causal scan I/O remains linear in context.
   Its 72-byte two-head fixture never reads the declared future token; exact-arena, pre-I/O range,
   transactional numeric-failure, and two-pass-softmax differential cases are pinned.
+- a native mixed-storage GLM-4-MoE-Lite MLA projector composing `q_a`, Q RMSNorm, `q_b`, `kv_a`, KV
+  RMSNorm, `kv_b`, provider-compatible interleaved-input RoPE, and per-head Q/K/V assembly. Its
+  296-byte miniature fixture matches an independent source-order reference, preflights all six matrix
+  and normalization readers before the first read, and commits Q/K/V only after the whole projection
+  succeeds. Identity and ternary linear plans now expose their validated minimum reader lengths so
+  composed operators can perform that complete preflight.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal
@@ -182,7 +190,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 121 Python tests, and runs 30 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 123 Python tests, and runs 33 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

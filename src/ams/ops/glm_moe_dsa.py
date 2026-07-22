@@ -111,15 +111,17 @@ def apply_rope_interleaved_reference(
         raise AmsError(ErrorCode.PLAN_INVALID, "RoPE position must be a nonnegative integer")
     if len(values) % 2:
         raise AmsError(ErrorCode.PLAN_INVALID, "interleaved RoPE dimension must be even")
-    output: list[float] = []
+    first: list[float] = []
+    second: list[float] = []
     for pair_index in range(len(values) // 2):
         angle = position / (theta ** (2 * pair_index / len(values)))
         cosine = math.cos(angle)
         sine = math.sin(angle)
         left = values[2 * pair_index]
         right = values[2 * pair_index + 1]
-        output.extend((left * cosine - right * sine, right * cosine + left * sine))
-    return tuple(output)
+        first.append(left * cosine - right * sine)
+        second.append(right * cosine + left * sine)
+    return tuple(first + second)
 
 
 def apply_rope_half_split_reference(

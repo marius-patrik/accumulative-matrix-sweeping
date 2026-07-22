@@ -56,6 +56,7 @@ pub struct IdentityLinearPlan {
     dtype: IdentityDType,
     reduction_tile: usize,
     encoded_bytes: usize,
+    weight_end: u64,
     scratch: IdentityScratchRequirements,
 }
 
@@ -107,7 +108,7 @@ impl IdentityLinearPlan {
             ACCUMULATOR_BYTES,
             "identity total scratch overflow",
         )?;
-        add_u64(
+        let weight_end = add_u64(
             weight_offset,
             usize_to_u64(encoded_bytes, "identity encoded size exceeds u64")?,
             "identity weight range overflows u64",
@@ -119,6 +120,7 @@ impl IdentityLinearPlan {
             dtype,
             reduction_tile,
             encoded_bytes,
+            weight_end,
             scratch: IdentityScratchRequirements {
                 encoded_bytes: scratch_encoded,
                 total_bytes,
@@ -148,6 +150,12 @@ impl IdentityLinearPlan {
     #[must_use]
     pub const fn columns(self) -> usize {
         self.columns
+    }
+
+    /// Minimum reader length required by this matrix range.
+    #[must_use]
+    pub const fn reader_end(self) -> u64 {
+        self.weight_end
     }
 }
 

@@ -66,6 +66,9 @@ BF16, or FP32 storage. It also pins allocation-free RMSNorm, LayerNorm, SiLU, so
 rotary layouts, causal DSA top-k, and noaux_tc expert routing with caller-owned outputs and scratch.
 The first native composed subgraph executes a mixed ternary/FP32/BF16 gated MLP from range readers
 with one reusable, explicitly accounted scratch set and no matrix materialization.
+The GLM-4-MoE-Lite native path composes its four mixed-storage MLA projections, two low-rank RMSNorms,
+provider-compatible rotary permutation, and transactional per-head Q/K/V assembly after preflighting
+all six weight readers.
 Native sparse-MoE composition now streams router logits, applies noaux_tc selection, reads only the
 selected routed experts plus the shared expert, and commits output only after the whole token succeeds.
 Sparse causal attention likewise range-reads only selected offloaded K/V vectors, accepts reused

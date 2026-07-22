@@ -32,6 +32,15 @@ impl LinearPlan {
         }
     }
 
+    /// Minimum reader length required by this storage-specific matrix range.
+    #[must_use]
+    pub const fn reader_end(self) -> u64 {
+        match self {
+            Self::Identity(plan) => plan.reader_end(),
+            Self::Ternary(plan) => plan.reader_end(),
+        }
+    }
+
     /// Exact scratch requirement for this storage-specific plan.
     #[must_use]
     pub const fn scratch(self) -> LinearScratchRequirements {
