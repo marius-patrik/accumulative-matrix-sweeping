@@ -103,14 +103,27 @@ The reconstruction branch currently contains:
   metadata, and allocation-limit checks, differential-tested against the official Python writer;
 - bounded content-addressed range publication and an atomically replaced conversion journal whose
   completed chunks survive process restart without rereading source bytes;
+- a strict Hugging Face shard-index normalizer that rejects unsafe paths and reconciles every indexed
+  tensor, shard header, source content hash, and declared total byte count before planning;
+- deterministic, schema-valid AMS identity manifests whose content root covers the canonical manifest
+  preimage and whose file becomes visible only after every tensor chunk and graph object is reverified;
+- experimental `ams.ternary.trit5` v1 encoding with fixed source-order threshold/scale arithmetic,
+  five trits per byte, FP32 group scales, canonical tail padding, bounded source-group reads, and a
+  pending-record protocol that recovers the post-transform/pre-journal crash window without rereading
+  the source tensor;
 - a scalar source-order FP32 linear oracle that streams weights and emits one output at a time.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, and runs 35 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
+Draft 2020-12, and runs 65 tests. The unit streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
 accumulator remains within that arena. This proves only the Phase 0 reference behavior; Python
 allocator overhead is not claimed as a production memory proof.
+
+The ternary implementation is a format and restart-semantics proof, not a model-quality claim. It uses
+an explicit 7/10 mean-absolute threshold and the mean magnitude of selected values as each group scale.
+No GLM tensor is assigned this encoding until a complete mixed per-tensor policy and calibration
+evidence show that the assignment meets the declared quality threshold.
 
 The safetensors boundary follows the official format contract: an eight-byte little-endian header
 length, bounded UTF-8 JSON metadata, relative tensor data offsets, duplicate-key rejection, and complete

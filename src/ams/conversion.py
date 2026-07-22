@@ -259,14 +259,44 @@ def execute_identity_conversion(
     *,
     buffer_bytes: int = 1024 * 1024,
 ) -> ConversionJournal:
-    """Publish every planned range, recording a durable per-chunk visibility decision."""
+    """Publish a single-source plan through the multi-source implementation."""
+    object_ids = {item.source_range.object_id for item in plan.items}
+    if len(object_ids) != 1:
+        raise AmsError(
+            ErrorCode.PLAN_INVALID,
+            "single-source conversion plan references multiple storage objects",
+        )
+    return execute_multi_source_identity_conversion(
+        {next(iter(object_ids)): reader},
+        plan,
+        destination_root,
+        journal_path,
+        buffer_bytes=buffer_bytes,
+    )
+
+
+def execute_multi_source_identity_conversion(
+    readers: dict[str, RangeReader],
+    plan: ConversionPlan,
+    destination_root: Path,
+    journal_path: Path,
+    *,
+    buffer_bytes: int = 1024 * 1024,
+) -> ConversionJournal:
+    """Publish a sharded plan, recording a durable per-chunk visibility decision."""
     store = ConversionJournalStore(journal_path)
     journal = store.load_or_create(plan)
     entries = {entry.target_chunk_id: entry for entry in journal.entries}
     for item in plan.items:
         entry = entries[item.target_chunk_id]
+        object_id = item.source_range.object_id
+        if object_id not in readers:
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                f"conversion source reader is missing: {object_id}",
+            )
         copy_range_atomic(
-            reader,
+            readers[object_id],
             item.source_range,
             destination_root,
             item.target_chunk_id,

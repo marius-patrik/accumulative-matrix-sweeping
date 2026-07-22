@@ -52,8 +52,10 @@ Production reconstruction is active on an isolated branch. The first executable 
 checked byte arithmetic, stable typed errors, immutable package and conversion-journal descriptors,
 canonical JSON, atomic resource-vector admission, a bounded synchronous file store, a hardened
 safetensors metadata boundary, restart-safe content-addressed range publication, and a scalar streamed
-FP32 linear oracle. It is a semantic and resource-bound reference, not yet a GLM inference engine or
-an OpenAI-compatible server.
+FP32 linear oracle. The experimental storage path also normalizes multi-shard Hugging Face indexes,
+publishes schema-valid AMS manifests last, and implements a deterministic grouped ternary reference
+codec with crash-recoverable transformed chunks. It is not yet a GLM inference engine or an
+OpenAI-compatible server, and the ternary codec is not a default quality policy.
 
 See [`docs/RECONSTRUCTION.md`](docs/RECONSTRUCTION.md) for source authority, hardware and model
 targets, implementation gates, integration boundaries, and current evidence.

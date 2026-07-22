@@ -6,10 +6,47 @@ import hashlib
 import os
 from pathlib import Path
 
-from ams.checked import checked_add
+from ams.checked import checked_add, checked_uint
 from ams.descriptors import ByteRange, validate_identifier
 from ams.errors import AmsError, ErrorCode
 from ams.storage.file import RangeReader
+
+
+def hash_reader_range(
+    reader: RangeReader,
+    offset: int,
+    length: int,
+    *,
+    buffer_bytes: int = 1024 * 1024,
+    algorithm: str = "sha256",
+) -> str:
+    """Hash a checked reader range with fixed payload residency."""
+    checked_uint(offset, name="hash.offset")
+    checked_uint(length, name="hash.length")
+    end = checked_add(offset, length, name="hash.end")
+    if end > reader.size_bytes:
+        raise AmsError(ErrorCode.IO_FAILURE, "hash range exceeds the source object")
+    if isinstance(buffer_bytes, bool) or not isinstance(buffer_bytes, int) or buffer_bytes <= 0:
+        raise AmsError(ErrorCode.PLAN_INVALID, "hash buffer size must be a positive integer")
+    if algorithm not in hashlib.algorithms_available or algorithm == "blake3":
+        raise AmsError(
+            ErrorCode.CAPABILITY_MISMATCH,
+            f"content hash backend is unavailable: {algorithm}",
+        )
+    digest = hashlib.new(algorithm)
+    buffer = bytearray(min(buffer_bytes, max(length, 1)))
+    view = memoryview(buffer)
+    try:
+        completed = 0
+        while completed < length:
+            count = min(len(buffer), length - completed)
+            window = view[:count]
+            reader.read_into(checked_add(offset, completed, name="hash.read_offset"), window)
+            digest.update(window)
+            completed += count
+    finally:
+        view.release()
+    return f"{algorithm}:{digest.hexdigest()}"
 
 
 def _hash_file(path: Path, *, expected_size: int, buffer_bytes: int, algorithm: str) -> str:
