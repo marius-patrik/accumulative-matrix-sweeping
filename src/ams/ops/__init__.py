@@ -21,10 +21,12 @@ from ams.ops.glm_moe_dsa_model import (
 )
 from ams.ops.glm_package_weights import GlmPackageReadEvidence, GlmPackageWeights
 from ams.ops.reference import (
+    Int4StreamedLinearPlan,
     StreamedLinearPlan,
     TernaryStreamedLinearPlan,
     stream_linear_f32,
     stream_linear_identity,
+    stream_linear_int4,
     stream_linear_ternary,
 )
 
@@ -37,6 +39,7 @@ __all__ = [
     "GlmReferenceTensor",
     "GlmReferenceWeights",
     "GlmWeightAccess",
+    "Int4StreamedLinearPlan",
     "StreamedLinearPlan",
     "TernaryStreamedLinearPlan",
     "apply_rope_half_split_reference",
@@ -50,5 +53,6 @@ __all__ = [
     "softmax_reference",
     "stream_linear_f32",
     "stream_linear_identity",
+    "stream_linear_int4",
     "stream_linear_ternary",
 ]

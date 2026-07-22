@@ -1,4 +1,4 @@
-"""Explicit per-tensor identity/ternary conversion for Hugging Face catalogs."""
+"""Explicit per-tensor identity/ternary/INT4 conversion for Hugging Face catalogs."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from ams.conversion import ConversionJournalStore
 from ams.descriptors import JournalEntryState
 from ams.errors import AmsError, ErrorCode
+from ams.int4_conversion import Int4ChunkSpec, publish_int4_chunk_atomic
 from ams.integrations.huggingface import (
     HuggingFaceCatalog,
     HuggingFaceMixedPlan,
@@ -64,6 +65,23 @@ def execute_huggingface_mixed_conversion(
                     shape=planned.tensor.shape,
                     source_dtype=planned.tensor.dtype,
                     config=planned.ternary_config,
+                ),
+                destination_root,
+                verification_buffer_bytes=verification_buffer_bytes,
+            )
+            target_hash = publication.target_hash
+            encoded_bytes = publication.encoded_bytes
+        elif planned.encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC:
+            if planned.int4_config is None:
+                raise AmsError(ErrorCode.INTERNAL_INVARIANT, "INT4 mixed tensor has no config")
+            publication = publish_int4_chunk_atomic(
+                reader,
+                Int4ChunkSpec(
+                    publication_key=item.target_chunk_id,
+                    source=item.source_range,
+                    shape=planned.tensor.shape,
+                    source_dtype=planned.tensor.dtype,
+                    config=planned.int4_config,
                 ),
                 destination_root,
                 verification_buffer_bytes=verification_buffer_bytes,

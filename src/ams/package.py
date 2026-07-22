@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from ams.canonical import canonical_json_bytes
-from ams.checked import checked_positive
-from ams.codecs import TernaryCodecConfig
+from ams.checked import checked_positive, checked_product
+from ams.codecs import Int4CodecConfig, TernaryCodecConfig
 from ams.descriptors import (
     DType,
     JournalEntryState,
@@ -120,6 +120,7 @@ class _PublishedManifestTensor:
     encoded_bytes: int
     encoding: HuggingFaceTensorEncoding
     ternary_config: TernaryCodecConfig | None = None
+    int4_config: Int4CodecConfig | None = None
 
 
 def _journal_entries(conversion, journal) -> dict[str, Any]:
@@ -209,6 +210,22 @@ def _mixed_manifest_tensors(
             and planned.ternary_config is None
         ):
             raise AmsError(ErrorCode.INTERNAL_INVARIANT, "ternary mixed tensor has no codec config")
+        element_count = checked_product(
+            planned.tensor.shape,
+            name=f"mixed_manifest.{planned.tensor.tensor_name}.elements",
+        )
+        if (
+            planned.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5
+            and entry.encoded_bytes != planned.ternary_config.encoded_size(element_count)
+        ):
+            raise AmsError(ErrorCode.INTEGRITY_FAILURE, "ternary chunk size changed in journal")
+        if planned.encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC:
+            if planned.int4_config is None:
+                raise AmsError(
+                    ErrorCode.INTERNAL_INVARIANT, "INT4 mixed tensor has no codec config"
+                )
+            if entry.encoded_bytes != planned.int4_config.encoded_size(element_count):
+                raise AmsError(ErrorCode.INTEGRITY_FAILURE, "INT4 chunk size changed in journal")
         published.append(
             _PublishedManifestTensor(
                 tensor=planned.tensor,
@@ -217,6 +234,7 @@ def _mixed_manifest_tensors(
                 encoded_bytes=entry.encoded_bytes,
                 encoding=planned.encoding,
                 ternary_config=planned.ternary_config,
+                int4_config=planned.int4_config,
             )
         )
     return tuple(published)
@@ -235,6 +253,21 @@ def _ternary_codec(config: TernaryCodecConfig, decoded_bytes: int) -> dict[str, 
             "ams.scale-dtype": config.scale_dtype.value,
             "ams.threshold-denominator": config.threshold_denominator,
             "ams.threshold-numerator": config.threshold_numerator,
+        },
+    }
+
+
+def _int4_codec(config: Int4CodecConfig, decoded_bytes: int) -> dict[str, Any]:
+    return {
+        "name": "ams.int4.symmetric",
+        "version": config.version,
+        "lossless": False,
+        "max_decoded_bytes": decoded_bytes,
+        "parameters": {
+            "ams.config-hash": config.config_hash,
+            "ams.group-size": config.group_size,
+            "ams.packing": config.packing,
+            "ams.scale-dtype": config.scale_dtype.value,
         },
     }
 
@@ -280,6 +313,13 @@ def _build_huggingface_manifest(
             storage_dtype = DType.CUSTOM.value
             codec = _ternary_codec(published_tensor.ternary_config, tensor.source_length)
             required_features.add("ams.codec.ternary.trit5.v1")
+        elif published_tensor.encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC:
+            if published_tensor.int4_config is None:
+                raise AmsError(ErrorCode.INTERNAL_INVARIANT, "INT4 manifest tensor has no config")
+            layout_id = "layout:int4.symmetric.v1"
+            storage_dtype = DType.CUSTOM.value
+            codec = _int4_codec(published_tensor.int4_config, tensor.source_length)
+            required_features.add("ams.codec.int4.symmetric.v1")
         else:
             raise AmsError(ErrorCode.INTERNAL_INVARIANT, "unknown manifest tensor encoding")
         algorithm, hexdigest = published_tensor.target_hash.split(":", 1)
@@ -461,7 +501,7 @@ def build_huggingface_mixed_manifest(
     default_dtype: DType,
     licenses: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Build one manifest containing explicit identity and ternary tensor layouts."""
+    """Build one manifest containing explicit identity, ternary, and INT4 layouts."""
     return _build_huggingface_manifest(
         catalog,
         _mixed_manifest_tensors(catalog, plan, journal),

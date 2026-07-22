@@ -12,7 +12,7 @@ from typing import Any
 
 from ams.canonical import canonical_json_bytes
 from ams.checked import checked_add, checked_mul, checked_positive, checked_product, checked_uint
-from ams.codecs import TernaryCodecConfig
+from ams.codecs import Int4CodecConfig, TernaryCodecConfig
 from ams.descriptors import DType, StorageObject, validate_digest, validate_identifier
 from ams.errors import AmsError, ErrorCode
 from ams.integrations.glm_moe_dsa import (
@@ -22,9 +22,11 @@ from ams.integrations.glm_moe_dsa import (
 )
 from ams.ops.glm_moe_dsa_model import GlmWeightAccess
 from ams.ops.reference import (
+    Int4StreamedLinearPlan,
     StreamedLinearPlan,
     TernaryStreamedLinearPlan,
     stream_linear_identity,
+    stream_linear_int4,
     stream_linear_ternary,
 )
 from ams.package import resolve_package_file, resolve_package_root, verify_manifest_content_root
@@ -33,8 +35,14 @@ from ams.storage import FileRangeStore
 _MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 _IDENTITY_FEATURE = "ams.identity-layout.v1"
 _ROOT_FEATURE = "ams.content-root.manifest-minus-root.v1"
+_INT4_FEATURE = "ams.codec.int4.symmetric.v1"
 _TERNARY_FEATURE = "ams.codec.ternary.trit5.v1"
-_SUPPORTED_REQUIRED_FEATURES = {_IDENTITY_FEATURE, _ROOT_FEATURE, _TERNARY_FEATURE}
+_SUPPORTED_REQUIRED_FEATURES = {
+    _IDENTITY_FEATURE,
+    _INT4_FEATURE,
+    _ROOT_FEATURE,
+    _TERNARY_FEATURE,
+}
 _ITEM_BYTES = {DType.FLOAT16: 2, DType.BFLOAT16: 2, DType.FLOAT32: 4}
 
 
@@ -122,6 +130,7 @@ class _PackageTensor:
     encoded_bytes: int
     decoded_bytes: int
     ternary_config: TernaryCodecConfig | None
+    int4_config: Int4CodecConfig | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +258,36 @@ def _parse_ternary_config(codec: dict[str, Any], decoded_bytes: int) -> TernaryC
     return config
 
 
+def _parse_int4_config(codec: dict[str, Any], decoded_bytes: int) -> Int4CodecConfig:
+    _exact_fields(
+        codec,
+        {"name", "version", "lossless", "max_decoded_bytes", "parameters"},
+        name="INT4 codec",
+    )
+    if (
+        codec["name"] != "ams.int4.symmetric"
+        or codec["version"] != "1.0.0"
+        or codec["lossless"] is not False
+        or codec["max_decoded_bytes"] != decoded_bytes
+    ):
+        raise AmsError(ErrorCode.CAPABILITY_MISMATCH, "INT4 codec declaration is unsupported")
+    parameters = _object(codec["parameters"], name="INT4 parameters")
+    _exact_fields(
+        parameters,
+        {"ams.config-hash", "ams.group-size", "ams.packing", "ams.scale-dtype"},
+        name="INT4 parameters",
+    )
+    config = Int4CodecConfig(
+        group_size=parameters["ams.group-size"],
+        scale_dtype=_dtype(parameters["ams.scale-dtype"], name="INT4 scale dtype"),
+        packing=parameters["ams.packing"],
+        version=codec["version"],
+    )
+    if parameters["ams.config-hash"] != config.config_hash:
+        raise AmsError(ErrorCode.INTEGRITY_FAILURE, "INT4 configuration hash mismatch")
+    return config
+
+
 def _parse_tensor(
     raw_value: Any,
     objects: dict[str, _VerifiedObject],
@@ -373,6 +412,7 @@ def _parse_tensor(
         ):
             raise AmsError(ErrorCode.INVALID_PACKAGE, "identity tensor layout is inconsistent")
         ternary_config = None
+        int4_config = None
     elif encoding == "ternary_trit5":
         if layout["layout_id"] != "layout:ternary.trit5.v1" or layout["storage_dtype"] != "custom":
             raise AmsError(ErrorCode.INVALID_PACKAGE, "ternary tensor layout is inconsistent")
@@ -382,6 +422,17 @@ def _parse_tensor(
         element_count = checked_product(shape, name="ternary.elements")
         if ternary_config.encoded_size(element_count) != encoded_bytes:
             raise AmsError(ErrorCode.INVALID_PACKAGE, "ternary encoded size is inconsistent")
+        int4_config = None
+    elif encoding == "int4_symmetric":
+        if layout["layout_id"] != "layout:int4.symmetric.v1" or layout["storage_dtype"] != "custom":
+            raise AmsError(ErrorCode.INVALID_PACKAGE, "INT4 tensor layout is inconsistent")
+        int4_config = _parse_int4_config(
+            _object(layout.get("codec"), name="tensor.codec"), decoded_bytes
+        )
+        element_count = checked_product(shape, name="int4.elements")
+        if int4_config.encoded_size(element_count) != encoded_bytes:
+            raise AmsError(ErrorCode.INVALID_PACKAGE, "INT4 encoded size is inconsistent")
+        ternary_config = None
     else:
         raise AmsError(ErrorCode.CAPABILITY_MISMATCH, "tensor encoding is unsupported")
     return _PackageTensor(
@@ -394,6 +445,7 @@ def _parse_tensor(
         encoded_bytes,
         decoded_bytes,
         ternary_config,
+        int4_config,
     )
 
 
@@ -515,6 +567,8 @@ class GlmPackageWeights(GlmWeightAccess):
             expected_features.add(_IDENTITY_FEATURE)
         if "ternary_trit5" in encodings:
             expected_features.add(_TERNARY_FEATURE)
+        if "int4_symmetric" in encodings:
+            expected_features.add(_INT4_FEATURE)
         if set(required_features) != expected_features:
             raise AmsError(
                 ErrorCode.INVALID_PACKAGE,
@@ -631,6 +685,20 @@ class GlmPackageWeights(GlmWeightAccess):
                 config=tensor.ternary_config,
             )
             stream_linear_ternary(
+                tensor.reader,
+                plan,
+                values,
+                lambda _, value: output.append(value),
+            )
+        elif tensor.encoding == "int4_symmetric" and tensor.int4_config is not None:
+            plan = Int4StreamedLinearPlan.create(
+                rows=rows,
+                columns=len(values),
+                weight_offset=tensor.offset,
+                arena_bytes=self._linear_arena_bytes,
+                config=tensor.int4_config,
+            )
+            stream_linear_int4(
                 tensor.reader,
                 plan,
                 values,

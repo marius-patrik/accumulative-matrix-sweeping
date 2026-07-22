@@ -10,7 +10,14 @@ import pytest
 from safetensors.numpy import save_file
 
 from ams.canonical import canonical_json_bytes
-from ams.codecs import TernaryCodecConfig, decode_ternary_reference, encode_ternary_stream
+from ams.codecs import (
+    Int4CodecConfig,
+    TernaryCodecConfig,
+    decode_int4_reference,
+    decode_ternary_reference,
+    encode_int4_stream,
+    encode_ternary_stream,
+)
 from ams.descriptors import ByteRange, DType, StorageObject
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
@@ -490,6 +497,24 @@ def ternary_reference_tensor(
     return GlmReferenceTensor(tensor.shape, tuple(decoded))
 
 
+def int4_reference_tensor(
+    tensor: GlmReferenceTensor,
+    config: Int4CodecConfig,
+) -> GlmReferenceTensor:
+    payload = struct.pack(f"<{len(tensor.values)}f", *tensor.values)
+    sink = BytesIO()
+    encode_int4_stream(
+        MemoryReader(payload),
+        ByteRange("fixture", 0, len(payload), digest(payload)),
+        tensor.shape,
+        DType.FLOAT32,
+        sink,
+        config,
+    )
+    decoded = decode_int4_reference(sink.getvalue(), len(tensor.values), config)
+    return GlmReferenceTensor(tensor.shape, tuple(decoded))
+
+
 def build_mini_glm_package(tmp_path: Path):
     architecture = tiny_architecture()
     tensors = {
@@ -531,17 +556,25 @@ def build_mini_glm_package(tmp_path: Path):
     )
     catalog = build_huggingface_catalog(index, (source,), buffer_bytes=97)
     ternary_config = TernaryCodecConfig(group_size=5)
+    int4_config = Int4CodecConfig(group_size=5)
     ternary_names = {
         f"model.layers.1.mlp.experts.0.{projection}_proj.weight"
         for projection in ("gate", "up", "down")
+    }
+    int4_names = {
+        "model.layers.0.self_attn.q_b_proj.weight",
+        "model.layers.0.self_attn.o_proj.weight",
     }
     assignments = tuple(
         HuggingFaceTensorAssignment(
             name,
             HuggingFaceTensorEncoding.TERNARY_TRIT5
             if name in ternary_names
+            else HuggingFaceTensorEncoding.INT4_SYMMETRIC
+            if name in int4_names
             else HuggingFaceTensorEncoding.IDENTITY,
-            ternary_config if name in ternary_names else None,
+            ternary_config=ternary_config if name in ternary_names else None,
+            int4_config=int4_config if name in int4_names else None,
         )
         for name in sorted(tensors)
     )
@@ -580,6 +613,8 @@ def build_mini_glm_package(tmp_path: Path):
     expected_tensors = dict(tensors)
     for name in ternary_names:
         expected_tensors[name] = ternary_reference_tensor(tensors[name], ternary_config)
+    for name in int4_names:
+        expected_tensors[name] = int4_reference_tensor(tensors[name], int4_config)
     return package_root, architecture, GlmReferenceWeights(expected_tensors)
 
 
@@ -703,11 +738,36 @@ def test_mini_glm_package_rejects_a_canonically_rewritten_partial_inventory(
     assert caught.value.evidence == {"missing": 1, "unexpected": 0}
 
 
-def test_mini_glm_package_rejects_encoding_feature_drift(tmp_path: Path) -> None:
+def test_mini_glm_package_rejects_int4_configuration_hash_drift(tmp_path: Path) -> None:
     package_root, _, _ = build_mini_glm_package(tmp_path)
     manifest_path = package_root / "manifest.json"
     manifest = json.loads(manifest_path.read_bytes())
-    manifest["required_features"].remove("ams.codec.ternary.trit5.v1")
+    tensor = next(
+        tensor
+        for tensor in manifest["tensors"]
+        if tensor["layouts"][0]["extensions"]["ams.encoding"] == "int4_symmetric"
+    )
+    tensor["layouts"][0]["codec"]["parameters"]["ams.config-hash"] = "sha256:" + "0" * 64
+    del manifest["content_root"]
+    manifest["content_root"] = digest(canonical_json_bytes(manifest))
+    manifest_path.write_bytes(canonical_json_bytes(manifest))
+    with pytest.raises(AmsError) as caught:
+        GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    assert caught.value.code is ErrorCode.INTEGRITY_FAILURE
+
+
+@pytest.mark.parametrize(
+    "feature",
+    ["ams.codec.ternary.trit5.v1", "ams.codec.int4.symmetric.v1"],
+)
+def test_mini_glm_package_rejects_encoding_feature_drift(
+    tmp_path: Path,
+    feature: str,
+) -> None:
+    package_root, _, _ = build_mini_glm_package(tmp_path)
+    manifest_path = package_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["required_features"].remove(feature)
     del manifest["content_root"]
     manifest["content_root"] = digest(canonical_json_bytes(manifest))
     manifest_path.write_bytes(canonical_json_bytes(manifest))

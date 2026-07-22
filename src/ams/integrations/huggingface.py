@@ -11,7 +11,7 @@ from typing import Any
 
 from ams.canonical import canonical_json_bytes
 from ams.checked import checked_add, checked_product, checked_uint
-from ams.codecs import TernaryCodecConfig
+from ams.codecs import Int4CodecConfig, TernaryCodecConfig
 from ams.conversion import ConversionItem, ConversionPlan
 from ams.descriptors import ByteRange, DType, validate_digest, validate_identifier
 from ams.errors import AmsError, ErrorCode
@@ -163,6 +163,38 @@ class HuggingFaceIdentityPlan:
 class HuggingFaceTensorEncoding(StrEnum):
     IDENTITY = "identity"
     TERNARY_TRIT5 = "ternary_trit5"
+    INT4_SYMMETRIC = "int4_symmetric"
+
+
+def _codec_config_identity_fields(
+    encoding: HuggingFaceTensorEncoding,
+    ternary_config: TernaryCodecConfig | None,
+    int4_config: Int4CodecConfig | None,
+) -> dict[str, str]:
+    """Enforce and identify the one codec configuration selected by an encoding."""
+    if ternary_config is not None and not isinstance(ternary_config, TernaryCodecConfig):
+        raise AmsError(ErrorCode.PLAN_INVALID, "ternary config has the wrong type")
+    if int4_config is not None and not isinstance(int4_config, Int4CodecConfig):
+        raise AmsError(ErrorCode.PLAN_INVALID, "INT4 config has the wrong type")
+    if encoding is HuggingFaceTensorEncoding.IDENTITY:
+        if ternary_config is not None or int4_config is not None:
+            raise AmsError(ErrorCode.PLAN_INVALID, "identity assignment cannot have codec config")
+        return {}
+    if encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5:
+        if ternary_config is None or int4_config is not None:
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "ternary assignment requires only a ternary codec config",
+            )
+        return {"ternary_config_hash": ternary_config.config_hash}
+    if encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC:
+        if int4_config is None or ternary_config is not None:
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "INT4 assignment requires only an INT4 codec config",
+            )
+        return {"int4_config_hash": int4_config.config_hash}
+    raise AmsError(ErrorCode.INTERNAL_INVARIANT, "unknown Hugging Face tensor encoding")
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,14 +202,12 @@ class HuggingFaceTensorAssignment:
     tensor_name: str
     encoding: HuggingFaceTensorEncoding
     ternary_config: TernaryCodecConfig | None = None
+    int4_config: Int4CodecConfig | None = None
 
     def __post_init__(self) -> None:
         _validate_external_name(self.tensor_name, field="tensor name", max_bytes=4096)
         object.__setattr__(self, "encoding", HuggingFaceTensorEncoding(self.encoding))
-        if self.encoding is HuggingFaceTensorEncoding.IDENTITY and self.ternary_config is not None:
-            raise AmsError(ErrorCode.PLAN_INVALID, "identity assignment cannot have ternary config")
-        if self.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5 and self.ternary_config is None:
-            raise AmsError(ErrorCode.PLAN_INVALID, "ternary assignment requires codec config")
+        _codec_config_identity_fields(self.encoding, self.ternary_config, self.int4_config)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +230,11 @@ class HuggingFaceProgressiveTensorPlan:
     target_chunk_id: str
     encoding: HuggingFaceTensorEncoding
     ternary_config: TernaryCodecConfig | None = None
+    int4_config: Int4CodecConfig | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "encoding", HuggingFaceTensorEncoding(self.encoding))
+        _codec_config_identity_fields(self.encoding, self.ternary_config, self.int4_config)
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +256,11 @@ class HuggingFaceMixedPlannedTensor:
     source_checksum: str
     encoding: HuggingFaceTensorEncoding
     ternary_config: TernaryCodecConfig | None = None
+    int4_config: Int4CodecConfig | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "encoding", HuggingFaceTensorEncoding(self.encoding))
+        _codec_config_identity_fields(self.encoding, self.ternary_config, self.int4_config)
 
 
 @dataclass(frozen=True, slots=True)
@@ -633,22 +673,26 @@ def build_huggingface_mixed_policy(
                 "mixed package v1 cannot encode zero-sized tensors",
             )
         if (
-            assignment.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5
+            assignment.encoding
+            in {
+                HuggingFaceTensorEncoding.TERNARY_TRIT5,
+                HuggingFaceTensorEncoding.INT4_SYMMETRIC,
+            }
             and tensor.dtype not in float_dtypes
         ):
             raise AmsError(
                 ErrorCode.CAPABILITY_MISMATCH,
-                f"ternary assignment requires a supported float source: {tensor.tensor_name}",
+                f"low-bit assignment requires a supported float source: {tensor.tensor_name}",
             )
         normalized.append(assignment)
         policy_payload.append(
             {
                 "tensor_name": tensor_name,
                 "encoding": assignment.encoding.value,
-                **(
-                    {"ternary_config_hash": assignment.ternary_config.config_hash}
-                    if assignment.ternary_config is not None
-                    else {}
+                **_codec_config_identity_fields(
+                    assignment.encoding,
+                    assignment.ternary_config,
+                    assignment.int4_config,
                 ),
             }
         )
@@ -696,6 +740,7 @@ def build_huggingface_progressive_mixed_plan(
             ),
             encoding=assignment_by_name[tensor.tensor_name].encoding,
             ternary_config=assignment_by_name[tensor.tensor_name].ternary_config,
+            int4_config=assignment_by_name[tensor.tensor_name].int4_config,
         )
         for tensor in catalog.tensors
     )
@@ -726,10 +771,10 @@ def build_huggingface_progressive_mixed_plan(
                 "source_length": planned.tensor.source_length,
                 "target_chunk_id": planned.target_chunk_id,
                 "encoding": planned.encoding.value,
-                **(
-                    {"ternary_config_hash": planned.ternary_config.config_hash}
-                    if planned.ternary_config is not None
-                    else {}
+                **_codec_config_identity_fields(
+                    planned.encoding,
+                    planned.ternary_config,
+                    planned.int4_config,
                 ),
             }
             for planned in tensors
@@ -783,6 +828,7 @@ def build_huggingface_mixed_plan(
                 source_checksum=checksum,
                 encoding=assignment.encoding,
                 ternary_config=assignment.ternary_config,
+                int4_config=assignment.int4_config,
             )
         )
     return HuggingFaceMixedPlan(

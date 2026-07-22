@@ -8,7 +8,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from ams.checked import checked_add, checked_mul, checked_positive, checked_uint
-from ams.codecs import TernaryCodecConfig, decode_ternary_group_reference
+from ams.codecs import (
+    Int4CodecConfig,
+    TernaryCodecConfig,
+    decode_int4_group_reference,
+    decode_ternary_group_reference,
+)
 from ams.descriptors import DType
 from ams.errors import AmsError, ErrorCode
 from ams.storage import RangeReader
@@ -319,6 +324,152 @@ def stream_linear_ternary(
             for index, value in enumerate(accumulators):
                 if not math.isfinite(value):
                     raise AmsError(ErrorCode.NUMERIC_FAILURE, "ternary linear output is non-finite")
+                emit(row_start + index, value)
+    finally:
+        record_view.release()
+
+
+@dataclass(frozen=True, slots=True)
+class Int4StreamedLinearPlan:
+    rows: int
+    columns: int
+    weight_offset: int
+    arena_bytes: int
+    output_row_tile: int
+    working_set_bytes: int
+    config: Int4CodecConfig
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        rows: int,
+        columns: int,
+        weight_offset: int,
+        arena_bytes: int,
+        config: Int4CodecConfig | None = None,
+    ) -> Int4StreamedLinearPlan:
+        config = config or Int4CodecConfig()
+        checked_positive(rows, name="int4_linear.rows")
+        checked_positive(columns, name="int4_linear.columns")
+        checked_uint(weight_offset, name="int4_linear.weight_offset")
+        checked_positive(arena_bytes, name="int4_linear.arena_bytes")
+        record_bytes = config.group_record_size(config.group_size)
+        decoded_group_bytes = checked_mul(
+            config.group_size,
+            _ACCUMULATOR_BYTES,
+            name="int4_linear.decoded_group",
+        )
+        fixed_bytes = checked_add(
+            record_bytes,
+            decoded_group_bytes,
+            name="int4_linear.fixed_working_set",
+        )
+        minimum = checked_add(
+            fixed_bytes,
+            _ACCUMULATOR_BYTES,
+            name="int4_linear.minimum_working_set",
+        )
+        if arena_bytes < minimum:
+            raise AmsError(
+                ErrorCode.PREFLIGHT_NO_WORKING_SET,
+                "INT4 linear arena cannot hold one group and output accumulator",
+                evidence={"available": arena_bytes, "minimum": minimum},
+            )
+        output_row_tile = min(rows, (arena_bytes - fixed_bytes) // _ACCUMULATOR_BYTES)
+        working_set_bytes = checked_add(
+            fixed_bytes,
+            checked_mul(
+                output_row_tile,
+                _ACCUMULATOR_BYTES,
+                name="int4_linear.output_accumulators",
+            ),
+            name="int4_linear.working_set",
+        )
+        element_count = checked_mul(rows, columns, name="int4_linear.elements")
+        checked_add(
+            weight_offset,
+            config.encoded_size(element_count),
+            name="int4_linear.weight_end",
+        )
+        return cls(
+            rows=rows,
+            columns=columns,
+            weight_offset=weight_offset,
+            arena_bytes=arena_bytes,
+            output_row_tile=output_row_tile,
+            working_set_bytes=working_set_bytes,
+            config=config,
+        )
+
+
+def stream_linear_int4(
+    store: RangeReader,
+    plan: Int4StreamedLinearPlan,
+    vector: Sequence[float],
+    emit: Callable[[int, float], None],
+    *,
+    bias: Sequence[float] | None = None,
+) -> None:
+    """Multiply directly from grouped symmetric INT4 with bounded row/group tiles."""
+    if len(vector) != plan.columns:
+        raise AmsError(ErrorCode.PLAN_INVALID, "INT4 linear input length is invalid")
+    if bias is not None and len(bias) != plan.rows:
+        raise AmsError(ErrorCode.PLAN_INVALID, "INT4 linear bias length is invalid")
+    if any(not math.isfinite(float(value)) for value in vector) or (
+        bias is not None and any(not math.isfinite(float(value)) for value in bias)
+    ):
+        raise AmsError(ErrorCode.NUMERIC_FAILURE, "INT4 linear input or bias is non-finite")
+    element_count = checked_mul(plan.rows, plan.columns, name="int4_linear.elements")
+    encoded_bytes = plan.config.encoded_size(element_count)
+    if (
+        checked_add(plan.weight_offset, encoded_bytes, name="int4_linear.weight_end")
+        > store.size_bytes
+    ):
+        raise AmsError(ErrorCode.IO_FAILURE, "INT4 linear weights exceed the storage object")
+    full_record_bytes = plan.config.group_record_size(plan.config.group_size)
+    record_buffer = bytearray(full_record_bytes)
+    record_view = memoryview(record_buffer)
+    try:
+        for row_start in range(0, plan.rows, plan.output_row_tile):
+            row_count = min(plan.output_row_tile, plan.rows - row_start)
+            accumulators = [
+                float(bias[row_start + index]) if bias is not None else 0.0
+                for index in range(row_count)
+            ]
+            flat_start = checked_mul(row_start, plan.columns, name="int4_linear.flat_start")
+            flat_end = checked_mul(
+                row_start + row_count,
+                plan.columns,
+                name="int4_linear.flat_end",
+            )
+            first_group = flat_start // plan.config.group_size
+            final_group = (flat_end - 1) // plan.config.group_size
+            for group_index in range(first_group, final_group + 1):
+                group_flat_start = group_index * plan.config.group_size
+                count = min(plan.config.group_size, element_count - group_flat_start)
+                record_size = plan.config.group_record_size(count)
+                record_offset = checked_add(
+                    plan.weight_offset,
+                    checked_mul(
+                        group_index,
+                        full_record_bytes,
+                        name="int4_linear.group_record_offset",
+                    ),
+                    name="int4_linear.record_offset",
+                )
+                store.read_into(record_offset, record_view[:record_size])
+                values = decode_int4_group_reference(record_view[:record_size], count)
+                local_start = max(flat_start, group_flat_start) - group_flat_start
+                local_end = min(flat_end, group_flat_start + count) - group_flat_start
+                for local_index in range(local_start, local_end):
+                    flat_index = group_flat_start + local_index
+                    output_index = flat_index // plan.columns - row_start
+                    input_index = flat_index % plan.columns
+                    accumulators[output_index] += values[local_index] * float(vector[input_index])
+            for index, value in enumerate(accumulators):
+                if not math.isfinite(value):
+                    raise AmsError(ErrorCode.NUMERIC_FAILURE, "INT4 linear output is non-finite")
                 emit(row_start + index, value)
     finally:
         record_view.release()

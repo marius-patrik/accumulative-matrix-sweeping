@@ -23,6 +23,7 @@ from ams.descriptors import (
     validate_digest,
 )
 from ams.errors import AmsError, ErrorCode
+from ams.int4_conversion import Int4ChunkSpec, publish_int4_chunk_atomic
 from ams.integrations.huggingface import (
     HuggingFaceCatalog,
     HuggingFaceHeaderCatalog,
@@ -349,6 +350,15 @@ class ProgressiveConversionJournalStore:
                 raise AmsError(
                     ErrorCode.INTEGRITY_FAILURE, "ternary progressive size is inconsistent"
                 )
+        if tensor.encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC:
+            if tensor.int4_config is None:
+                raise AmsError(ErrorCode.INTERNAL_INVARIANT, "INT4 plan has no codec config")
+            element_count = checked_product(
+                tensor.tensor.shape,
+                name=f"progressive.{tensor.tensor.tensor_name}.elements",
+            )
+            if encoded_bytes != tensor.int4_config.encoded_size(element_count):
+                raise AmsError(ErrorCode.INTEGRITY_FAILURE, "INT4 progressive size is inconsistent")
         return ProgressiveTensorRecord(
             tensor.tensor.tensor_name,
             tensor.tensor.shard_name,
@@ -557,6 +567,22 @@ def _publish_tensor(
             verification_buffer_bytes=buffer_bytes,
         )
         return publication.target_hash, publication.encoded_bytes
+    if planned.encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC:
+        if planned.int4_config is None:
+            raise AmsError(ErrorCode.INTERNAL_INVARIANT, "INT4 plan has no codec config")
+        publication = publish_int4_chunk_atomic(
+            reader,
+            Int4ChunkSpec(
+                planned.target_chunk_id,
+                source_range,
+                planned.tensor.shape,
+                planned.tensor.dtype,
+                planned.int4_config,
+            ),
+            destination_root,
+            verification_buffer_bytes=buffer_bytes,
+        )
+        return publication.target_hash, publication.encoded_bytes
     raise AmsError(ErrorCode.INTERNAL_INVARIANT, "progressive tensor encoding is unknown")
 
 
@@ -712,6 +738,7 @@ def finalize_progressive_huggingface_mixed_conversion(
                 source_checksum=record.source_checksum,
                 encoding=tensor.encoding,
                 ternary_config=tensor.ternary_config,
+                int4_config=tensor.int4_config,
             )
         )
     conversion = ConversionPlan(plan.source_root, plan.policy_hash, tuple(items))

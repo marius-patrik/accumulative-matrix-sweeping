@@ -183,9 +183,12 @@ The reconstruction branch currently contains:
   checksum, non-finite, reserved-code, and padding failures are pinned. A content-addressed INT4
   publication transaction now binds its durable record to the exact source, shape, dtype, and codec
   configuration; completed and pending transactions recover without source rereads, while orphaned,
-  corrupt, or plan-disagreeing state fails closed. This is not yet a production storage layout:
-  mixed plans/manifests, package readers, native direct linear execution, and quality qualification
-  remain required before any GLM tensor may use it.
+  corrupt, or plan-disagreeing state fails closed. Eager and shard-progressive policies include the
+  selected INT4 configuration in their stable identities and publish `ams.codec.int4.symmetric.v1`
+  layouts. The package reader validates that declaration and executes matrices directly from bounded
+  group records; a miniature GLM pass has full-decode parity while mixing identity, ternary, and INT4
+  tensors. This remains experimental and opt-in: native direct linear execution and quality
+  qualification remain required before a GLM precision policy may select it.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -245,11 +248,12 @@ The reconstruction branch currently contains:
   pinned as regression anchors. MTP remains an explicit `UNSUPPORTED_OP`, never a silent no-op.
 - execution of that same miniature graph from a canonical, manifest-last, exact-inventory AMS package.
   All 69 fixture tensors are declared; the selected routed expert's gate/up/down matrices use trit5
-  ternary and the rest use identity FP32. Direct package-range execution exactly matches a trusted
-  materialized decoder of those ternary payloads. Content objects are hash-verified lazily before first
-  use, a mutated embedding object fails with `INTEGRITY_FAILURE`, required-feature drift and partial
-  inventories fail closed, and the measured maximum verification/range buffer in the 64-byte-arena test
-  is 64 bytes.
+  ternary, two dense-layer attention projections use grouped INT4, and the rest use identity FP32.
+  Direct package-range execution exactly matches a trusted materialized decoder of those low-bit
+  payloads. Content objects are hash-verified lazily before first use, a mutated embedding object and
+  altered INT4 configuration hash fail with `INTEGRITY_FAILURE`, required-feature drift and partial
+  inventories fail closed, and the measured maximum verification/range buffer in the 64-byte-arena
+  test is 64 bytes.
 - a dependency-free experimental OpenAI/Froq protocol boundary. Responses and Chat Completions inputs
   normalize to one typed request containing source-ordered messages, reasoning context, function calls
   and results, tool schemas, structured-output intent, and sampling controls. Strict UTF-8 JSON parsing
@@ -266,7 +270,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 157 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 173 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
@@ -275,8 +279,8 @@ allocator overhead is not claimed as a production memory proof.
 
 The ternary implementation is a format and restart-semantics proof, not a model-quality claim. It uses
 an explicit 7/10 mean-absolute threshold and the mean magnitude of selected values as each group scale.
-No GLM tensor is assigned this encoding until a complete mixed per-tensor policy and calibration
-evidence show that the assignment meets the declared quality threshold.
+No production GLM tensor is assigned this encoding until calibration evidence shows that the complete
+mixed per-tensor policy meets the declared quality threshold.
 
 The miniature GLM provider keeps complete tiny tensors in memory solely to serve as a trusted semantic
 fixture. The composed runner itself sees only vector, embedding-row, and linear operations through a

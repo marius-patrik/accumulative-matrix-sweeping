@@ -105,8 +105,10 @@ grouped FP32 scales, signed low-nibble-first values restricted to -7 through 7, 
 half-away-from-zero rounding, canonical tail padding, bounded source reads, and strict checksum/
 numeric validation. Its content-addressed chunk publisher has an exact configuration/source record,
 resumes completed and pending transactions without source rereads, rejects orphaned or corrupt state,
-and journals only verified output. It is not yet admitted into mixed manifests, native execution, or a
-GLM precision policy.
+and journals only verified output. Eager and shard-progressive mixed plans now identify its exact
+configuration, publish schema-valid manifests, and reload it through a bounded Python direct-linear
+path; a miniature GLM pass mixes identity, ternary, and INT4 storage with full-decode parity. INT4 is
+still opt-in: native execution and quality qualification remain before any GLM precision policy.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,

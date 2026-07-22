@@ -8,7 +8,12 @@ import pytest
 from jsonschema.validators import Draft202012Validator
 from safetensors.numpy import save_file
 
-from ams.codecs import TernaryCodecConfig, decode_ternary_reference
+from ams.codecs import (
+    Int4CodecConfig,
+    TernaryCodecConfig,
+    decode_int4_reference,
+    decode_ternary_reference,
+)
 from ams.descriptors import DType, StorageObject
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
@@ -69,6 +74,7 @@ def prepare_source(tmp_path: Path):
     values = {
         "model.embed.weight": np.arange(12, dtype=np.float32).reshape(3, 4),
         "model.layers.0.mlp.experts.0.weight": np.arange(20, dtype=np.float32).reshape(4, 5) - 10,
+        "model.layers.0.self_attn.q_proj.weight": np.arange(15, dtype=np.float32).reshape(3, 5) - 7,
     }
     save_file(values, shard_path)
     payload = shard_path.read_bytes()
@@ -105,7 +111,11 @@ def prepare_catalog(tmp_path: Path):
     return build_huggingface_catalog(index, (source,), buffer_bytes=19), source
 
 
-def assignments(config: TernaryCodecConfig):
+def assignments(
+    config: TernaryCodecConfig,
+    int4_config: Int4CodecConfig | None = None,
+):
+    int4_config = int4_config or Int4CodecConfig(group_size=4)
     return (
         HuggingFaceTensorAssignment(
             "model.embed.weight",
@@ -115,6 +125,11 @@ def assignments(config: TernaryCodecConfig):
             "model.layers.0.mlp.experts.0.weight",
             HuggingFaceTensorEncoding.TERNARY_TRIT5,
             config,
+        ),
+        HuggingFaceTensorAssignment(
+            "model.layers.0.self_attn.q_proj.weight",
+            HuggingFaceTensorEncoding.INT4_SYMMETRIC,
+            int4_config=int4_config,
         ),
     )
 
@@ -260,13 +275,24 @@ def test_explicit_mixed_policy_converts_publishes_and_restarts_without_source(
         for tensor in plan.tensors
         if tensor.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5
     )
+    int4 = next(
+        tensor
+        for tensor in plan.tensors
+        if tensor.encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC
+    )
     assert by_id[identity.target_chunk_id].target_hash == identity.source_checksum
     assert by_id[ternary.target_chunk_id].target_hash != ternary.source_checksum
+    assert by_id[int4.target_chunk_id].target_hash != int4.source_checksum
     ternary_hash = by_id[ternary.target_chunk_id].target_hash
     algorithm, hexdigest = ternary_hash.split(":", 1)
     ternary_payload = (package_root / "chunks" / f"{algorithm}-{hexdigest}.bin").read_bytes()
     decoded = decode_ternary_reference(ternary_payload, 20, config)
     assert len(decoded) == 20
+    int4_hash = by_id[int4.target_chunk_id].target_hash
+    algorithm, hexdigest = int4_hash.split(":", 1)
+    int4_payload = (package_root / "chunks" / f"{algorithm}-{hexdigest}.bin").read_bytes()
+    int4_decoded = decode_int4_reference(int4_payload, 15, int4.int4_config)
+    assert len(int4_decoded) == 15
 
     graph = graph_for(package_root)
     manifest = build_huggingface_mixed_manifest(
@@ -285,6 +311,7 @@ def test_explicit_mixed_policy_converts_publishes_and_restarts_without_source(
     Draft202012Validator(schema).validate(manifest)
     assert "ams.identity-layout.v1" in manifest["required_features"]
     assert "ams.codec.ternary.trit5.v1" in manifest["required_features"]
+    assert "ams.codec.int4.symmetric.v1" in manifest["required_features"]
     tensors_by_name = {
         tensor["extensions"]["hf.source-name"]: tensor for tensor in manifest["tensors"]
     }
@@ -292,6 +319,10 @@ def test_explicit_mixed_policy_converts_publishes_and_restarts_without_source(
     assert ternary_layout["storage_dtype"] == "custom"
     assert ternary_layout["codec"]["name"] == "ams.ternary.trit5"
     assert ternary_layout["codec"]["parameters"]["ams.config-hash"] == config.config_hash
+    int4_layout = tensors_by_name["model.layers.0.self_attn.q_proj.weight"]["layouts"][0]
+    assert int4_layout["storage_dtype"] == "custom"
+    assert int4_layout["codec"]["name"] == "ams.int4.symmetric"
+    assert int4_layout["codec"]["parameters"]["ams.config-hash"] == int4.int4_config.config_hash
     assert publish_manifest_last(package_root, manifest, buffer_bytes=5).is_file()
 
     fail_reader = FailOnRead(source.reader.size_bytes)
@@ -321,10 +352,45 @@ def test_mixed_policy_rejects_missing_assignment(tmp_path: Path) -> None:
     assert caught.value.code is ErrorCode.PLAN_INVALID
 
 
+def test_assignments_require_exactly_the_selected_codec_config() -> None:
+    ternary = TernaryCodecConfig(group_size=5)
+    int4 = Int4CodecConfig(group_size=4)
+    with pytest.raises(AmsError) as caught:
+        HuggingFaceTensorAssignment(
+            "tensor.weight",
+            HuggingFaceTensorEncoding.IDENTITY,
+            int4_config=int4,
+        )
+    assert caught.value.code is ErrorCode.PLAN_INVALID
+
+    with pytest.raises(AmsError) as caught:
+        HuggingFaceTensorAssignment(
+            "tensor.weight",
+            HuggingFaceTensorEncoding.INT4_SYMMETRIC,
+        )
+    assert caught.value.code is ErrorCode.PLAN_INVALID
+
+    with pytest.raises(AmsError) as caught:
+        HuggingFaceTensorAssignment(
+            "tensor.weight",
+            HuggingFaceTensorEncoding.INT4_SYMMETRIC,
+            ternary_config=ternary,
+            int4_config=int4,
+        )
+    assert caught.value.code is ErrorCode.PLAN_INVALID
+
+
 def test_mixed_policy_rejects_ternary_for_non_float_source(tmp_path: Path) -> None:
     catalog, _ = prepare_catalog(tmp_path)
-    first, second = catalog.tensors
-    changed = replace(catalog, tensors=(first, replace(second, dtype=DType.INT16)))
+    changed = replace(
+        catalog,
+        tensors=tuple(
+            replace(tensor, dtype=DType.INT16)
+            if tensor.tensor_name == "model.layers.0.mlp.experts.0.weight"
+            else tensor
+            for tensor in catalog.tensors
+        ),
+    )
     with pytest.raises(AmsError) as caught:
         build_huggingface_mixed_plan(
             changed,
@@ -342,6 +408,23 @@ def test_policy_hash_and_chunk_ids_change_with_ternary_configuration(tmp_path: P
     second = build_huggingface_mixed_plan(
         catalog,
         assignments(TernaryCodecConfig(group_size=10)),
+    )
+    assert first.policy_hash != second.policy_hash
+    assert [tensor.target_chunk_id for tensor in first.tensors] != [
+        tensor.target_chunk_id for tensor in second.tensors
+    ]
+
+
+def test_policy_hash_and_chunk_ids_change_with_int4_configuration(tmp_path: Path) -> None:
+    catalog, _ = prepare_catalog(tmp_path)
+    ternary_config = TernaryCodecConfig(group_size=5)
+    first = build_huggingface_mixed_plan(
+        catalog,
+        assignments(ternary_config, Int4CodecConfig(group_size=4)),
+    )
+    second = build_huggingface_mixed_plan(
+        catalog,
+        assignments(ternary_config, Int4CodecConfig(group_size=8)),
     )
     assert first.policy_hash != second.policy_hash
     assert [tensor.target_chunk_id for tensor in first.tensors] != [
