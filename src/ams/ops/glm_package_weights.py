@@ -15,6 +15,11 @@ from ams.checked import checked_add, checked_mul, checked_positive, checked_prod
 from ams.codecs import Int4CodecConfig, TernaryCodecConfig
 from ams.descriptors import DType, StorageObject, validate_digest, validate_identifier
 from ams.errors import AmsError, ErrorCode
+from ams.integrations.glm4_moe_lite import (
+    Glm4MoeLiteArchitecture,
+    expected_glm4_moe_lite_tensor_slots,
+    parse_glm4_moe_lite_architecture,
+)
 from ams.integrations.glm_moe_dsa import (
     GlmMoeDsaArchitecture,
     expected_glm_tensor_slots,
@@ -454,7 +459,7 @@ class GlmPackageWeights(GlmWeightAccess):
 
     def __init__(
         self,
-        architecture: GlmMoeDsaArchitecture,
+        architecture: GlmMoeDsaArchitecture | Glm4MoeLiteArchitecture,
         tensors: dict[str, _PackageTensor],
         *,
         linear_arena_bytes: int,
@@ -530,10 +535,21 @@ class GlmPackageWeights(GlmWeightAccess):
         _exact_fields(
             model, {"architecture", "configuration", "default_dtype"}, name="manifest.model"
         )
-        if model["architecture"] != "GlmMoeDsaForCausalLM":
-            raise AmsError(ErrorCode.CAPABILITY_MISMATCH, "AMS package is not GLM-MoE-DSA")
         _dtype(model["default_dtype"], name="model default dtype")
-        architecture = parse_glm_moe_dsa_architecture(canonical_json_bytes(model["configuration"]))
+        configuration_payload = canonical_json_bytes(model["configuration"])
+        if model["architecture"] == "GlmMoeDsaForCausalLM":
+            architecture = parse_glm_moe_dsa_architecture(configuration_payload)
+            expected_names = {slot.tensor_name for slot in expected_glm_tensor_slots(architecture)}
+        elif model["architecture"] == "Glm4MoeLiteForCausalLM":
+            architecture = parse_glm4_moe_lite_architecture(configuration_payload)
+            expected_names = {
+                slot.tensor_name for slot in expected_glm4_moe_lite_tensor_slots(architecture)
+            }
+        else:
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "AMS package architecture is not a reviewed GLM causal LM",
+            )
         objects = _parse_storage_objects(
             root,
             manifest,
@@ -551,11 +567,10 @@ class GlmPackageWeights(GlmWeightAccess):
                 )
             tensors[parsed.source_name] = parsed
             tensor_ids.add(tensor_id)
-        expected_names = {slot.tensor_name for slot in expected_glm_tensor_slots(architecture)}
         if set(tensors) != expected_names:
             raise AmsError(
                 ErrorCode.CAPABILITY_MISMATCH,
-                "AMS package does not contain the exact reviewed GLM tensor inventory",
+                "AMS package does not contain its architecture's exact reviewed tensor inventory",
                 evidence={
                     "missing": len(expected_names - set(tensors)),
                     "unexpected": len(set(tensors) - expected_names),

@@ -1,4 +1,4 @@
-"""Composed scalar GLM-MoE-DSA prefill oracle over abstract weight access."""
+"""Composed scalar GLM-family prefill oracles over abstract weight access."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Protocol
 
 from ams.checked import checked_positive, checked_product
 from ams.errors import AmsError, ErrorCode
+from ams.integrations.glm4_moe_lite import Glm4MoeLiteArchitecture
 from ams.integrations.glm_moe_dsa import GlmMoeDsaArchitecture
 from ams.ops.glm_moe_dsa import (
     GlmExpertRouting,
@@ -137,6 +138,23 @@ class GlmReferenceOutput:
     layers: tuple[GlmReferenceLayerTrace, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class Glm4ReferenceLayerTrace:
+    layer_index: int
+    causal_key_indices: tuple[tuple[int, ...], ...]
+    expert_routing: tuple[GlmExpertRouting, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Glm4ReferenceOutput:
+    hidden_states: tuple[tuple[float, ...], ...]
+    logits: tuple[tuple[float, ...], ...]
+    layers: tuple[Glm4ReferenceLayerTrace, ...]
+
+
+type _MlaArchitecture = GlmMoeDsaArchitecture | Glm4MoeLiteArchitecture
+
+
 def _add(left: Sequence[float], right: Sequence[float], *, name: str) -> tuple[float, ...]:
     if len(left) != len(right) or not left:
         raise AmsError(ErrorCode.INTERNAL_INVARIANT, f"{name} vector dimensions differ")
@@ -183,7 +201,7 @@ def _gated_mlp(
 
 
 def _build_attention_projections(
-    architecture: GlmMoeDsaArchitecture,
+    architecture: _MlaArchitecture,
     weights: GlmWeightAccess,
     prefix: str,
     hidden_states: tuple[tuple[float, ...], ...],
@@ -260,6 +278,50 @@ def _build_attention_projections(
         keys.append(tuple(key_heads))
         values.append(tuple(value_heads))
     return tuple(queries), tuple(keys), tuple(values), tuple(query_residuals)
+
+
+def _project_attention_outputs(
+    architecture: _MlaArchitecture,
+    weights: GlmWeightAccess,
+    prefix: str,
+    queries: tuple[tuple[tuple[float, ...], ...], ...],
+    keys: tuple[tuple[tuple[float, ...], ...], ...],
+    values: tuple[tuple[tuple[float, ...], ...], ...],
+    selected_indices: tuple[tuple[int, ...], ...],
+) -> tuple[tuple[float, ...], ...]:
+    if not (
+        len(queries) == len(keys) == len(values) == len(selected_indices)
+        and all(indices for indices in selected_indices)
+    ):
+        raise AmsError(ErrorCode.INTERNAL_INVARIANT, "attention sequence dimensions differ")
+    outputs: list[tuple[float, ...]] = []
+    scale = architecture.qk_head_dim**-0.5
+    for query_index, selected_keys in enumerate(selected_indices):
+        concatenated: list[float] = []
+        for head_index in range(architecture.num_attention_heads):
+            scores = tuple(
+                _dot(
+                    queries[query_index][head_index],
+                    keys[key_index][head_index],
+                    name="attention.score",
+                )
+                * scale
+                for key_index in selected_keys
+            )
+            probabilities = softmax_reference(scores)
+            head_output = [0.0] * architecture.v_head_dim
+            for probability, key_index in zip(probabilities, selected_keys, strict=True):
+                for value_index, value in enumerate(values[key_index][head_index]):
+                    head_output[value_index] += probability * value
+            concatenated.extend(head_output)
+        outputs.append(
+            weights.linear(
+                f"{prefix}.self_attn.o_proj.weight",
+                concatenated,
+                architecture.hidden_size,
+            )
+        )
+    return tuple(outputs)
 
 
 def _run_full_indexer(
@@ -346,38 +408,22 @@ def _run_attention(
     else:
         raise AmsError(ErrorCode.INTERNAL_INVARIANT, "shared DSA layer has no prior index")
 
-    outputs: list[tuple[float, ...]] = []
-    scale = architecture.qk_head_dim**-0.5
-    for query_index, selected_keys in enumerate(dsa_indices):
-        concatenated: list[float] = []
-        for head_index in range(architecture.num_attention_heads):
-            scores = tuple(
-                _dot(
-                    queries[query_index][head_index],
-                    keys[key_index][head_index],
-                    name="attention.score",
-                )
-                * scale
-                for key_index in selected_keys
-            )
-            probabilities = softmax_reference(scores)
-            head_output = [0.0] * architecture.v_head_dim
-            for probability, key_index in zip(probabilities, selected_keys, strict=True):
-                for value_index, value in enumerate(values[key_index][head_index]):
-                    head_output[value_index] += probability * value
-            concatenated.extend(head_output)
-        outputs.append(
-            weights.linear(
-                f"{prefix}.self_attn.o_proj.weight",
-                concatenated,
-                architecture.hidden_size,
-            )
-        )
-    return tuple(outputs), dsa_indices
+    return (
+        _project_attention_outputs(
+            architecture,
+            weights,
+            prefix,
+            queries,
+            keys,
+            values,
+            dsa_indices,
+        ),
+        dsa_indices,
+    )
 
 
 def _run_sparse_mlp(
-    architecture: GlmMoeDsaArchitecture,
+    architecture: _MlaArchitecture,
     weights: GlmWeightAccess,
     prefix: str,
     hidden_states: tuple[tuple[float, ...], ...],
@@ -423,6 +469,103 @@ def _run_sparse_mlp(
         )
         outputs.append(tuple(value + shared[index] for index, value in enumerate(routed)))
     return tuple(outputs), tuple(routes)
+
+
+def _run_glm4_full_attention(
+    architecture: Glm4MoeLiteArchitecture,
+    weights: GlmWeightAccess,
+    prefix: str,
+    hidden_states: tuple[tuple[float, ...], ...],
+) -> tuple[tuple[tuple[float, ...], ...], tuple[tuple[int, ...], ...]]:
+    queries, keys, values, _ = _build_attention_projections(
+        architecture, weights, prefix, hidden_states
+    )
+    causal_indices = tuple(tuple(range(position + 1)) for position in range(len(hidden_states)))
+    return (
+        _project_attention_outputs(
+            architecture,
+            weights,
+            prefix,
+            queries,
+            keys,
+            values,
+            causal_indices,
+        ),
+        causal_indices,
+    )
+
+
+def run_glm4_moe_lite_prefill_reference(
+    architecture: Glm4MoeLiteArchitecture,
+    weights: GlmWeightAccess,
+    input_ids: Sequence[int],
+    *,
+    enable_mtp: bool = False,
+) -> Glm4ReferenceOutput:
+    """Execute a batch-one GLM-4-MoE-Lite full-attention prefill without MTP."""
+    if enable_mtp:
+        raise AmsError(ErrorCode.UNSUPPORTED_OP, "GLM-4 MTP reference execution is not implemented")
+    if not input_ids or len(input_ids) > architecture.max_position_embeddings:
+        raise AmsError(ErrorCode.PLAN_INVALID, "input token count is empty or exceeds context")
+    hidden_states = tuple(
+        weights.embedding("model.embed_tokens.weight", token_id, architecture.hidden_size)
+        for token_id in input_ids
+    )
+    traces: list[Glm4ReferenceLayerTrace] = []
+    for layer_index in range(architecture.num_hidden_layers):
+        prefix = f"model.layers.{layer_index}"
+        residual = hidden_states
+        input_norm_weight = weights.vector(
+            f"{prefix}.input_layernorm.weight", architecture.hidden_size
+        )
+        normalized = tuple(
+            rms_norm_reference(values, input_norm_weight, architecture.rms_norm_eps)
+            for values in hidden_states
+        )
+        attention, causal_indices = _run_glm4_full_attention(
+            architecture, weights, prefix, normalized
+        )
+        hidden_states = tuple(
+            _add(left, right, name="GLM-4 attention residual")
+            for left, right in zip(residual, attention, strict=True)
+        )
+        residual = hidden_states
+        post_norm_weight = weights.vector(
+            f"{prefix}.post_attention_layernorm.weight", architecture.hidden_size
+        )
+        normalized = tuple(
+            rms_norm_reference(values, post_norm_weight, architecture.rms_norm_eps)
+            for values in hidden_states
+        )
+        if architecture.mlp_layer_types[layer_index] == "dense":
+            mlp = tuple(
+                _gated_mlp(
+                    weights,
+                    f"{prefix}.mlp",
+                    values,
+                    architecture.intermediate_size,
+                    architecture.hidden_size,
+                )
+                for values in normalized
+            )
+            routes: tuple[GlmExpertRouting, ...] = ()
+        else:
+            mlp, routes = _run_sparse_mlp(architecture, weights, prefix, normalized)
+        hidden_states = tuple(
+            _add(left, right, name="GLM-4 MLP residual")
+            for left, right in zip(residual, mlp, strict=True)
+        )
+        traces.append(Glm4ReferenceLayerTrace(layer_index, causal_indices, routes))
+    final_norm_weight = weights.vector("model.norm.weight", architecture.hidden_size)
+    hidden_states = tuple(
+        rms_norm_reference(values, final_norm_weight, architecture.rms_norm_eps)
+        for values in hidden_states
+    )
+    logits = tuple(
+        weights.linear("lm_head.weight", values, architecture.vocab_size)
+        for values in hidden_states
+    )
+    return Glm4ReferenceOutput(hidden_states, logits, tuple(traces))
 
 
 def run_glm_moe_dsa_prefill_reference(

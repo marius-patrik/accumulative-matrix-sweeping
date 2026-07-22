@@ -85,6 +85,11 @@ unchanged so the token position can be retried.
 The corresponding sparse GLM-4 layer replaces the dense tail with bounded noaux_tc routing, one
 selected-expert working set, and the shared expert. It admits the complete reader inventory before the
 first weight read and publishes neither the staged K/V row nor caller output when a late expert fails.
+A separate scalar GLM-4-MoE-Lite oracle executes embeddings, full causal attention, the dense/sparse
+layer schedule, final normalization, and LM head from the same mixed package boundary used by the
+GLM-5 fixture. Its architecture field selects one exact parser and inventory; that inventory contains
+9,703 names for the pinned GLM-4.7 model. The tiny fixture proves mixed identity/ternary/INT4 execution
+and leaves MTP explicitly unsupported.
 An experimental dependency-free localhost adapter now normalizes Froq-shaped Responses and Chat
 Completions requests into one typed model contract and emits byte-exact text, reasoning, tool-call,
 usage, error, and SSE terminal frames. It is deliberately backend-injected: no fixture response is

@@ -12,11 +12,14 @@ from ams.ops.glm_moe_dsa import (
     softmax_reference,
 )
 from ams.ops.glm_moe_dsa_model import (
+    Glm4ReferenceLayerTrace,
+    Glm4ReferenceOutput,
     GlmReferenceLayerTrace,
     GlmReferenceOutput,
     GlmReferenceTensor,
     GlmReferenceWeights,
     GlmWeightAccess,
+    run_glm4_moe_lite_prefill_reference,
     run_glm_moe_dsa_prefill_reference,
 )
 from ams.ops.glm_package_weights import GlmPackageReadEvidence, GlmPackageWeights
@@ -31,6 +34,8 @@ from ams.ops.reference import (
 )
 
 __all__ = [
+    "Glm4ReferenceLayerTrace",
+    "Glm4ReferenceOutput",
     "GlmExpertRouting",
     "GlmPackageReadEvidence",
     "GlmPackageWeights",
@@ -48,6 +53,7 @@ __all__ = [
     "layer_norm_reference",
     "rms_norm_reference",
     "route_glm_experts_reference",
+    "run_glm4_moe_lite_prefill_reference",
     "run_glm_moe_dsa_prefill_reference",
     "silu_reference",
     "softmax_reference",
