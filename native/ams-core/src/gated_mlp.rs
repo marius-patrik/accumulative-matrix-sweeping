@@ -83,6 +83,12 @@ impl GatedMlpPlan {
     pub const fn output_elements(self) -> usize {
         self.output_elements
     }
+
+    pub(crate) fn readers_admit(self, readers: &GatedMlpReaders<'_>) -> bool {
+        self.gate.reader_end() <= readers.gate.len()
+            && self.up.reader_end() <= readers.up.len()
+            && self.down.reader_end() <= readers.down.len()
+    }
 }
 
 /// Reusable scratch and logical high-water for one gated MLP.

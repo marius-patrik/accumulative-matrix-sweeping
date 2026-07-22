@@ -174,11 +174,18 @@ The reconstruction branch currently contains:
   composed operators can perform that complete preflight.
 - a caller-owned, fixed-capacity native K/V cache for the GLM-4 bring-up path. It admits exact BF16 or
   FP32 key/value arenas and one encoded staging row, requires sequential token positions, performs
-  BF16 round-to-nearest-even with non-finite overflow rejection, copies a complete staged K/V pair,
-  and publishes the committed prefix length last. Prefix-limited range readers expose no uncommitted
-  or future bytes and feed the full-attention primitive directly. Non-finite, out-of-order,
-  short-staging, and over-capacity failures preserve both storage and the visible prefix. FP16 and
-  low-bit cache codecs remain explicitly unsupported until independently qualified.
+  BF16 round-to-nearest-even with non-finite overflow rejection, and makes the authoritative next row
+  available as `committed prefix + staged row` without publishing it. Commit copies the complete K/V
+  pair and advances the sole authoritative prefix length last. Prefix readers never expose future
+  bytes. Non-finite, state-disagreement, out-of-order, short-staging, and over-capacity failures
+  preserve both storage and the visible prefix. FP16 and low-bit cache codecs remain explicitly
+  unsupported until independently qualified.
+- a complete native dense GLM-4-MoE-Lite decoder-layer token path composing input RMSNorm, mixed MLA,
+  staged full causal attention, output projection and residual, post-attention RMSNorm, dense gated
+  MLP, and the final residual. Its exact 568-byte miniature fixture proves success, a numeric failure
+  after the current K/V row has been staged, and successful retry at that same token position. A row is
+  committed and caller output becomes visible only after the whole layer succeeds; the late-failure
+  case preserves both the prior cache prefix and the caller's output sentinel.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal
@@ -197,7 +204,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 123 Python tests, and runs 36 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 123 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

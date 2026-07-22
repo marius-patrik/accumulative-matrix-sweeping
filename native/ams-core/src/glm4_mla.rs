@@ -272,6 +272,42 @@ impl Glm4MlaPlan {
     pub const fn scratch(&self) -> Glm4MlaScratchRequirements {
         self.scratch
     }
+
+    /// Decoder hidden width consumed by both low-rank projections.
+    #[must_use]
+    pub const fn hidden_elements(&self) -> usize {
+        self.hidden_elements
+    }
+
+    /// Number of expanded attention heads.
+    #[must_use]
+    pub const fn head_count(&self) -> usize {
+        self.head_count
+    }
+
+    /// Per-head concatenated nonrotary and rotary Q/K width.
+    #[must_use]
+    pub const fn qk_head_dim(&self) -> usize {
+        self.qk_head_dim
+    }
+
+    /// Per-head value width.
+    #[must_use]
+    pub const fn value_head_dim(&self) -> usize {
+        self.value_head_dim
+    }
+
+    /// Concatenated Q/K elements emitted for one token.
+    #[must_use]
+    pub const fn query_key_output_elements(&self) -> usize {
+        self.scratch.query_output_elements
+    }
+
+    /// Concatenated value elements emitted for one token.
+    #[must_use]
+    pub const fn value_output_elements(&self) -> usize {
+        self.scratch.value_output_elements
+    }
 }
 
 /// Six immutable storage objects used by one MLA projection plan.
@@ -353,7 +389,7 @@ impl<'a> Glm4MlaScratch<'a> {
         }
     }
 
-    const fn admits(&self, requirement: Glm4MlaScratchRequirements) -> bool {
+    pub(crate) const fn admits(&self, requirement: Glm4MlaScratchRequirements) -> bool {
         self.linear.admits(requirement.linear)
             && self.norm_encoded.len() >= requirement.norm_encoded_bytes
             && self.norm_weights.len() >= requirement.norm_weight_elements

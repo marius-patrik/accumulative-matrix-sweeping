@@ -10,6 +10,7 @@ mod error;
 mod full_attention;
 mod gated_mlp;
 mod glm;
+mod glm4_dense_layer;
 mod glm4_mla;
 mod identity;
 mod kv_cache;
@@ -31,6 +32,10 @@ pub use gated_mlp::{
 pub use glm::{
     DsaTopKPlan, GlmRouterPlan, GlmRouterScratch, glm_dsa_topk, glm_layer_norm, glm_rms_norm,
     glm_rope_half_split, glm_rope_interleaved, glm_route_experts, glm_silu, glm_softmax,
+};
+pub use glm4_dense_layer::{
+    Glm4DenseLayerNormLayout, Glm4DenseLayerPlan, Glm4DenseLayerReaders, Glm4DenseLayerScratch,
+    Glm4DenseLayerScratchRequirements, glm4_dense_layer_token,
 };
 pub use glm4_mla::{
     Glm4MlaNormLayout, Glm4MlaPlan, Glm4MlaReaders, Glm4MlaScratch, Glm4MlaScratchRequirements,

@@ -255,6 +255,13 @@ impl<'a> FullAttentionScratch<'a> {
             output,
         }
     }
+
+    pub(crate) const fn admits(&self, requirement: FullAttentionScratchRequirements) -> bool {
+        self.encoded.len() >= requirement.encoded_bytes
+            && self.key.len() >= requirement.key_elements
+            && self.value.len() >= requirement.value_elements
+            && self.output.len() >= requirement.output_elements
+    }
 }
 
 fn dimension_as_f64(value: usize) -> Result<f64, AmsError> {

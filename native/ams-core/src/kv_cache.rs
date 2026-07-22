@@ -210,6 +210,10 @@ impl<'a> KvCache<'a> {
         self.committed_tokens
     }
 
+    pub(crate) const fn plan(&self) -> KvCachePlan {
+        self.plan
+    }
+
     /// Encode and append exactly the next token row, publishing the prefix length last.
     ///
     /// Numeric and capacity failures leave both storage arenas and the committed prefix unchanged.
@@ -220,6 +224,18 @@ impl<'a> KvCache<'a> {
     /// Returns a typed plan, capacity, or numeric error.
     pub fn append(
         &mut self,
+        position: usize,
+        key: &[f64],
+        value: &[f64],
+        staging: &mut [u8],
+    ) -> Result<(), AmsError> {
+        self.stage_row(position, key, value, staging)?;
+        self.commit_staged(position, staging)
+    }
+
+    /// Encode the authoritative next position without changing the committed prefix.
+    pub(crate) fn stage_row(
+        &self,
         position: usize,
         key: &[f64],
         value: &[f64],
@@ -260,6 +276,34 @@ impl<'a> KvCache<'a> {
             staging[..self.plan.requirements.staging_bytes].split_at_mut(self.plan.key_row_bytes);
         encode_row(key, self.plan.key_dtype, staged_key)?;
         encode_row(value, self.plan.value_dtype, staged_value)?;
+        Ok(())
+    }
+
+    /// Publish a previously encoded authoritative next row after its consumer succeeds.
+    pub(crate) fn commit_staged(
+        &mut self,
+        position: usize,
+        staging: &[u8],
+    ) -> Result<(), AmsError> {
+        if position != self.committed_tokens || position >= self.plan.capacity_tokens {
+            return Err(AmsError::new(
+                ErrorCode::PlanInvalid,
+                "K/V cache staged commit disagrees with the authoritative prefix",
+            ));
+        }
+        if staging.len() < self.plan.requirements.staging_bytes {
+            return Err(AmsError::new(
+                ErrorCode::PreflightNoWorkingSet,
+                "K/V cache staged commit row is too small",
+            ));
+        }
+        let next_committed = add(
+            self.committed_tokens,
+            1,
+            "K/V cache committed prefix overflow",
+        )?;
+        let (staged_key, staged_value) =
+            staging[..self.plan.requirements.staging_bytes].split_at(self.plan.key_row_bytes);
 
         let key_start = mul(
             position,
@@ -274,12 +318,43 @@ impl<'a> KvCache<'a> {
         self.keys[key_start..key_start + self.plan.key_row_bytes].copy_from_slice(staged_key);
         self.values[value_start..value_start + self.plan.value_row_bytes]
             .copy_from_slice(staged_value);
-        self.committed_tokens = add(
-            self.committed_tokens,
-            1,
-            "K/V cache committed prefix overflow",
-        )?;
+        self.committed_tokens = next_committed;
         Ok(())
+    }
+
+    /// Borrow the committed prefix plus one staged authoritative next row.
+    pub(crate) fn staged_view<'view>(
+        &'view self,
+        position: usize,
+        staging: &'view [u8],
+    ) -> Result<StagedKvCacheView<'view>, AmsError> {
+        if position != self.committed_tokens || position >= self.plan.capacity_tokens {
+            return Err(AmsError::new(
+                ErrorCode::PlanInvalid,
+                "K/V cache staged view disagrees with the authoritative prefix",
+            ));
+        }
+        if staging.len() < self.plan.requirements.staging_bytes {
+            return Err(AmsError::new(
+                ErrorCode::PreflightNoWorkingSet,
+                "K/V cache staged view row is too small",
+            ));
+        }
+        let key_prefix_bytes = self.committed_tokens * self.plan.key_row_bytes;
+        let value_prefix_bytes = self.committed_tokens * self.plan.value_row_bytes;
+        let (staged_key, staged_value) =
+            staging[..self.plan.requirements.staging_bytes].split_at(self.plan.key_row_bytes);
+        Ok(StagedKvCacheView {
+            keys: ConcatenatedReader {
+                prefix: &self.keys[..key_prefix_bytes],
+                suffix: staged_key,
+            },
+            values: ConcatenatedReader {
+                prefix: &self.values[..value_prefix_bytes],
+                suffix: staged_value,
+            },
+            staged_tokens: position + 1,
+        })
     }
 
     /// Borrow a read-only view limited to the completely committed token prefix.
@@ -376,6 +451,78 @@ impl KvCacheView<'_> {
 
 struct KvCacheReader<'a> {
     bytes: &'a [u8],
+}
+
+/// Read-only cache view that includes exactly one staged, uncommitted next row.
+pub struct StagedKvCacheView<'a> {
+    keys: ConcatenatedReader<'a>,
+    values: ConcatenatedReader<'a>,
+    staged_tokens: usize,
+}
+
+impl StagedKvCacheView<'_> {
+    pub const fn staged_tokens(&self) -> usize {
+        self.staged_tokens
+    }
+
+    pub const fn key_reader(&self) -> &dyn RangeReader {
+        &self.keys
+    }
+
+    pub const fn value_reader(&self) -> &dyn RangeReader {
+        &self.values
+    }
+}
+
+struct ConcatenatedReader<'a> {
+    prefix: &'a [u8],
+    suffix: &'a [u8],
+}
+
+impl RangeReader for ConcatenatedReader<'_> {
+    fn len(&self) -> u64 {
+        u64::try_from(self.prefix.len().saturating_add(self.suffix.len())).unwrap_or(u64::MAX)
+    }
+
+    fn read_exact_at(&self, offset: u64, destination: &mut [u8]) -> Result<(), AmsError> {
+        let start = usize::try_from(offset).map_err(|_| {
+            AmsError::new(
+                ErrorCode::IoFailure,
+                "staged K/V cache read offset exceeds usize",
+            )
+        })?;
+        let end = start.checked_add(destination.len()).ok_or_else(|| {
+            AmsError::new(ErrorCode::IoFailure, "staged K/V cache read range overflow")
+        })?;
+        let total = self
+            .prefix
+            .len()
+            .checked_add(self.suffix.len())
+            .ok_or_else(|| {
+                AmsError::new(ErrorCode::IoFailure, "staged K/V cache length overflow")
+            })?;
+        if end > total {
+            return Err(AmsError::new(
+                ErrorCode::IoFailure,
+                "staged K/V cache read exceeds the visible prefix",
+            ));
+        }
+        let prefix_count = if start < self.prefix.len() {
+            destination.len().min(self.prefix.len() - start)
+        } else {
+            0
+        };
+        if prefix_count > 0 {
+            destination[..prefix_count].copy_from_slice(&self.prefix[start..start + prefix_count]);
+        }
+        if prefix_count < destination.len() {
+            let suffix_start = start.saturating_sub(self.prefix.len());
+            let suffix_count = destination.len() - prefix_count;
+            destination[prefix_count..]
+                .copy_from_slice(&self.suffix[suffix_start..suffix_start + suffix_count]);
+        }
+        Ok(())
+    }
 }
 
 impl RangeReader for KvCacheReader<'_> {
@@ -516,6 +663,38 @@ mod tests {
                 .err()
                 .map(AmsError::code),
             Some(ErrorCode::CapabilityMismatch)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn staged_view_is_visible_without_publishing_and_rejects_state_disagreement()
+    -> Result<(), AmsError> {
+        let plan = KvCachePlan::new(1, 2, 1, 2, IdentityDType::Float32, IdentityDType::Float32)?;
+        let mut key_storage = [0u8; 16];
+        let mut value_storage = [0u8; 8];
+        let mut cache = KvCache::new(plan, &mut key_storage, &mut value_storage)?;
+        let mut staging = [0u8; 12];
+        cache.stage_row(0, &[1.0, 2.0], &[3.0], &mut staging)?;
+        assert_eq!(cache.committed_tokens(), 0);
+        assert_eq!(cache.view().key_reader().len(), 0);
+        let staged = cache.staged_view(0, &staging)?;
+        assert_eq!(staged.staged_tokens(), 1);
+        assert_eq!(staged.key_reader().len(), 8);
+        assert_eq!(staged.value_reader().len(), 4);
+        let mut encoded_key = [0u8; 8];
+        staged.key_reader().read_exact_at(0, &mut encoded_key)?;
+        assert_eq!(&encoded_key[..4], &1.0f32.to_le_bytes());
+        assert_eq!(&encoded_key[4..], &2.0f32.to_le_bytes());
+        assert_eq!(
+            cache.staged_view(1, &staging).err().map(AmsError::code),
+            Some(ErrorCode::PlanInvalid)
+        );
+        cache.commit_staged(0, &staging)?;
+        assert_eq!(cache.committed_tokens(), 1);
+        assert_eq!(
+            cache.commit_staged(0, &staging).err().map(AmsError::code),
+            Some(ErrorCode::PlanInvalid)
         );
         Ok(())
     }

@@ -75,8 +75,11 @@ Sparse causal attention likewise range-reads only selected offloaded K/V vectors
 IndexShare indices, and uses transactional caller-owned output scratch.
 The GLM-4-MoE-Lite path also has a native full causal attention primitive whose online softmax scans
 all causal K/V ranges with scratch independent of context length and never reads future-token vectors.
-A fixed-capacity caller-owned BF16/FP32 K/V cache stages each complete token row before advancing its
-visible prefix, so attention cannot observe partial or future cache entries.
+A fixed-capacity caller-owned BF16/FP32 K/V cache can expose a staged next row to the current layer
+without advancing its visible prefix, then publish it only after the layer succeeds. The first complete
+native dense GLM-4 decoder-layer path composes both RMSNorms, MLA, staged causal attention, output
+projection, residuals, and gated MLP transactionally; a late failure leaves both cache and caller output
+unchanged so the token position can be retried.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,
