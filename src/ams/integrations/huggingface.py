@@ -135,6 +135,19 @@ class HuggingFaceCatalogPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class HuggingFaceHeaderCatalog:
+    """An exact structural catalog whose expected shard hashes are not yet payload-verified."""
+
+    source_root: str
+    index_content_hash: str
+    index_metadata_hash: str
+    total_size: int
+    tensors: tuple[HuggingFaceCatalogTensor, ...]
+    sources: tuple[HuggingFaceShardSource, ...]
+    audit: HuggingFaceHeaderAudit
+
+
+@dataclass(frozen=True, slots=True)
 class HuggingFacePlannedTensor:
     tensor: HuggingFaceCatalogTensor
     target_chunk_id: str | None
@@ -165,6 +178,40 @@ class HuggingFaceTensorAssignment:
             raise AmsError(ErrorCode.PLAN_INVALID, "identity assignment cannot have ternary config")
         if self.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5 and self.ternary_config is None:
             raise AmsError(ErrorCode.PLAN_INVALID, "ternary assignment requires codec config")
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceMixedPolicy:
+    policy_hash: str
+    assignments: tuple[HuggingFaceTensorAssignment, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceProgressiveShardPlan:
+    shard_name: str
+    object_id: str
+    content_hash: str
+    size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceProgressiveTensorPlan:
+    tensor: HuggingFaceCatalogTensor
+    target_chunk_id: str
+    encoding: HuggingFaceTensorEncoding
+    ternary_config: TernaryCodecConfig | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HuggingFaceProgressiveMixedPlan:
+    source_root: str
+    index_content_hash: str
+    index_metadata_hash: str
+    policy_hash: str
+    plan_hash: str
+    total_size: int
+    shards: tuple[HuggingFaceProgressiveShardPlan, ...]
+    tensors: tuple[HuggingFaceProgressiveTensorPlan, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,6 +439,79 @@ def audit_huggingface_headers(
     return audit
 
 
+def _preflight_total_size_semantics(
+    index: HuggingFaceShardIndex,
+    policy: HuggingFaceCatalogPolicy,
+) -> None:
+    if (
+        policy.total_size_semantics is HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS
+        and policy.expected_index_content_hash != index.content_hash
+    ):
+        raise AmsError(
+            ErrorCode.PLAN_INVALID,
+            "Hugging Face index does not match the pinned size-semantics exception",
+        )
+
+
+def _validate_total_size_semantics(
+    index: HuggingFaceShardIndex,
+    audit: HuggingFaceHeaderAudit,
+    policy: HuggingFaceCatalogPolicy,
+) -> None:
+    observed = (
+        audit.tensor_elements
+        if policy.total_size_semantics is HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS
+        else audit.tensor_bytes
+    )
+    if observed != index.total_size:
+        raise AmsError(
+            ErrorCode.INVALID_PACKAGE,
+            "Hugging Face total_size does not match tensor storage",
+            evidence={"actual": observed, "declared": index.total_size},
+        )
+
+
+def _huggingface_source_root(
+    index: HuggingFaceShardIndex,
+    sources: tuple[HuggingFaceShardSource, ...],
+) -> str:
+    payload = {
+        "index": index.content_hash,
+        "shards": [
+            {"name": source.shard_name, "content_hash": source.content_hash}
+            for source in sorted(sources, key=lambda item: item.shard_name)
+        ],
+    }
+    return "sha256:" + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+def build_huggingface_header_catalog(
+    index: HuggingFaceShardIndex,
+    sources: tuple[HuggingFaceShardSource, ...],
+    *,
+    policy: HuggingFaceCatalogPolicy | None = None,
+) -> HuggingFaceHeaderCatalog:
+    """Build a structural catalog without reading or claiming integrity for tensor payloads."""
+    policy = policy or HuggingFaceCatalogPolicy()
+    _preflight_total_size_semantics(index, policy)
+    tensors, audit = _inspect_huggingface_headers(
+        index,
+        sources,
+        verify_hashes=False,
+        buffer_bytes=1,
+    )
+    _validate_total_size_semantics(index, audit, policy)
+    return HuggingFaceHeaderCatalog(
+        source_root=_huggingface_source_root(index, sources),
+        index_content_hash=index.content_hash,
+        index_metadata_hash=index.metadata_hash,
+        total_size=audit.tensor_bytes,
+        tensors=tensors,
+        sources=tuple(sorted(sources, key=lambda source: source.shard_name)),
+        audit=audit,
+    )
+
+
 def build_huggingface_catalog(
     index: HuggingFaceShardIndex,
     sources: tuple[HuggingFaceShardSource, ...],
@@ -401,40 +521,16 @@ def build_huggingface_catalog(
 ) -> HuggingFaceCatalog:
     """Cross-check the provider index, immutable shard hashes, and normalized headers."""
     policy = policy or HuggingFaceCatalogPolicy()
-    if (
-        policy.total_size_semantics is HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS
-        and policy.expected_index_content_hash != index.content_hash
-    ):
-        raise AmsError(
-            ErrorCode.PLAN_INVALID,
-            "Hugging Face index does not match the pinned size-semantics exception",
-        )
+    _preflight_total_size_semantics(index, policy)
     tensors, audit = _inspect_huggingface_headers(
         index,
         sources,
         verify_hashes=True,
         buffer_bytes=buffer_bytes,
     )
-    if policy.total_size_semantics is HuggingFaceTotalSizeSemantics.TENSOR_ELEMENTS:
-        observed_declared_size = audit.tensor_elements
-    else:
-        observed_declared_size = audit.tensor_bytes
-    if observed_declared_size != index.total_size:
-        raise AmsError(
-            ErrorCode.INVALID_PACKAGE,
-            "Hugging Face total_size does not match tensor storage",
-            evidence={"actual": observed_declared_size, "declared": index.total_size},
-        )
-    source_root_payload = {
-        "index": index.content_hash,
-        "shards": [
-            {"name": source.shard_name, "content_hash": source.content_hash}
-            for source in sorted(sources, key=lambda item: item.shard_name)
-        ],
-    }
-    source_root = "sha256:" + hashlib.sha256(canonical_json_bytes(source_root_payload)).hexdigest()
+    _validate_total_size_semantics(index, audit, policy)
     return HuggingFaceCatalog(
-        source_root=source_root,
+        source_root=_huggingface_source_root(index, sources),
         index_content_hash=index.content_hash,
         index_metadata_hash=index.metadata_hash,
         total_size=audit.tensor_bytes,
@@ -509,43 +605,28 @@ def _hash_catalog_tensor(
     )
 
 
-def build_huggingface_mixed_plan(
-    catalog: HuggingFaceCatalog,
+def build_huggingface_mixed_policy(
+    tensors: tuple[HuggingFaceCatalogTensor, ...],
     assignments: tuple[HuggingFaceTensorAssignment, ...],
-    *,
-    buffer_bytes: int = 1024 * 1024,
-) -> HuggingFaceMixedPlan:
-    """Build a plan only when every tensor has one explicit storage encoding."""
+) -> HuggingFaceMixedPolicy:
+    """Normalize one complete mixed policy for both eager and progressive conversion."""
     assignment_by_name = {assignment.tensor_name: assignment for assignment in assignments}
-    catalog_names = {tensor.tensor_name for tensor in catalog.tensors}
-    if len(assignment_by_name) != len(assignments) or set(assignment_by_name) != catalog_names:
+    tensor_by_name = {tensor.tensor_name: tensor for tensor in tensors}
+    if (
+        len(assignment_by_name) != len(assignments)
+        or len(tensor_by_name) != len(tensors)
+        or set(assignment_by_name) != set(tensor_by_name)
+    ):
         raise AmsError(
             ErrorCode.PLAN_INVALID,
             "mixed policy must assign every catalog tensor exactly once",
         )
-    source_by_id = {source.object_id: source for source in catalog.sources}
-    if len(source_by_id) != len(catalog.sources):
-        raise AmsError(ErrorCode.PLAN_INVALID, "Hugging Face source object IDs are not unique")
-    policy_payload = []
-    for tensor_name in sorted(assignment_by_name):
-        assignment = assignment_by_name[tensor_name]
-        policy_payload.append(
-            {
-                "tensor_name": tensor_name,
-                "encoding": assignment.encoding.value,
-                **(
-                    {"ternary_config_hash": assignment.ternary_config.config_hash}
-                    if assignment.ternary_config is not None
-                    else {}
-                ),
-            }
-        )
-    policy_hash = "sha256:" + hashlib.sha256(canonical_json_bytes(policy_payload)).hexdigest()
-    planned: list[HuggingFaceMixedPlannedTensor] = []
-    items: list[ConversionItem] = []
     float_dtypes = {DType.FLOAT16, DType.BFLOAT16, DType.FLOAT32}
-    for tensor in catalog.tensors:
-        assignment = assignment_by_name[tensor.tensor_name]
+    normalized: list[HuggingFaceTensorAssignment] = []
+    policy_payload = []
+    for tensor_name in sorted(tensor_by_name):
+        tensor = tensor_by_name[tensor_name]
+        assignment = assignment_by_name[tensor_name]
         if tensor.source_length == 0 or 0 in tensor.shape:
             raise AmsError(
                 ErrorCode.CAPABILITY_MISMATCH,
@@ -559,14 +640,134 @@ def build_huggingface_mixed_plan(
                 ErrorCode.CAPABILITY_MISMATCH,
                 f"ternary assignment requires a supported float source: {tensor.tensor_name}",
             )
+        normalized.append(assignment)
+        policy_payload.append(
+            {
+                "tensor_name": tensor_name,
+                "encoding": assignment.encoding.value,
+                **(
+                    {"ternary_config_hash": assignment.ternary_config.config_hash}
+                    if assignment.ternary_config is not None
+                    else {}
+                ),
+            }
+        )
+    policy_hash = "sha256:" + hashlib.sha256(canonical_json_bytes(policy_payload)).hexdigest()
+    return HuggingFaceMixedPolicy(policy_hash, tuple(normalized))
+
+
+def _huggingface_mixed_target_chunk_id(
+    policy_hash: str,
+    assignment: HuggingFaceTensorAssignment,
+) -> str:
+    identity = {
+        "encoding": assignment.encoding.value,
+        "policy_hash": policy_hash,
+        "tensor_name": assignment.tensor_name,
+    }
+    return "tensor:" + hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+
+
+def build_huggingface_progressive_mixed_plan(
+    catalog: HuggingFaceHeaderCatalog,
+    assignments: tuple[HuggingFaceTensorAssignment, ...],
+) -> HuggingFaceProgressiveMixedPlan:
+    """Plan exact mixed outputs from headers without reading any tensor payload."""
+    policy = build_huggingface_mixed_policy(catalog.tensors, assignments)
+    assignment_by_name = {assignment.tensor_name: assignment for assignment in policy.assignments}
+    source_by_id = {source.object_id: source for source in catalog.sources}
+    if len(source_by_id) != len(catalog.sources):
+        raise AmsError(ErrorCode.PLAN_INVALID, "Hugging Face source object IDs are not unique")
+    shards = tuple(
+        HuggingFaceProgressiveShardPlan(
+            source.shard_name,
+            source.object_id,
+            source.content_hash,
+            source.reader.size_bytes,
+        )
+        for source in catalog.sources
+    )
+    tensors = tuple(
+        HuggingFaceProgressiveTensorPlan(
+            tensor=tensor,
+            target_chunk_id=_huggingface_mixed_target_chunk_id(
+                policy.policy_hash,
+                assignment_by_name[tensor.tensor_name],
+            ),
+            encoding=assignment_by_name[tensor.tensor_name].encoding,
+            ternary_config=assignment_by_name[tensor.tensor_name].ternary_config,
+        )
+        for tensor in catalog.tensors
+    )
+    plan_payload = {
+        "source_root": catalog.source_root,
+        "index_content_hash": catalog.index_content_hash,
+        "index_metadata_hash": catalog.index_metadata_hash,
+        "policy_hash": policy.policy_hash,
+        "total_size": catalog.total_size,
+        "shards": [
+            {
+                "shard_name": shard.shard_name,
+                "object_id": shard.object_id,
+                "content_hash": shard.content_hash,
+                "size_bytes": shard.size_bytes,
+            }
+            for shard in shards
+        ],
+        "tensors": [
+            {
+                "tensor_name": planned.tensor.tensor_name,
+                "shard_name": planned.tensor.shard_name,
+                "object_id": planned.tensor.object_id,
+                "dtype": planned.tensor.dtype.value,
+                "source_dtype": planned.tensor.source_dtype,
+                "shape": list(planned.tensor.shape),
+                "source_offset": planned.tensor.source_offset,
+                "source_length": planned.tensor.source_length,
+                "target_chunk_id": planned.target_chunk_id,
+                "encoding": planned.encoding.value,
+                **(
+                    {"ternary_config_hash": planned.ternary_config.config_hash}
+                    if planned.ternary_config is not None
+                    else {}
+                ),
+            }
+            for planned in tensors
+        ],
+    }
+    plan_hash = "sha256:" + hashlib.sha256(canonical_json_bytes(plan_payload)).hexdigest()
+    return HuggingFaceProgressiveMixedPlan(
+        source_root=catalog.source_root,
+        index_content_hash=catalog.index_content_hash,
+        index_metadata_hash=catalog.index_metadata_hash,
+        policy_hash=policy.policy_hash,
+        plan_hash=plan_hash,
+        total_size=catalog.total_size,
+        shards=shards,
+        tensors=tensors,
+    )
+
+
+def build_huggingface_mixed_plan(
+    catalog: HuggingFaceCatalog,
+    assignments: tuple[HuggingFaceTensorAssignment, ...],
+    *,
+    buffer_bytes: int = 1024 * 1024,
+) -> HuggingFaceMixedPlan:
+    """Build a plan only when every tensor has one explicit storage encoding."""
+    policy = build_huggingface_mixed_policy(catalog.tensors, assignments)
+    assignment_by_name = {assignment.tensor_name: assignment for assignment in policy.assignments}
+    source_by_id = {source.object_id: source for source in catalog.sources}
+    if len(source_by_id) != len(catalog.sources):
+        raise AmsError(ErrorCode.PLAN_INVALID, "Hugging Face source object IDs are not unique")
+    planned: list[HuggingFaceMixedPlannedTensor] = []
+    items: list[ConversionItem] = []
+    for tensor in catalog.tensors:
+        assignment = assignment_by_name[tensor.tensor_name]
         checksum = _hash_catalog_tensor(source_by_id, tensor, buffer_bytes=buffer_bytes)
-        target_identity = {
-            "encoding": assignment.encoding.value,
-            "policy_hash": policy_hash,
-            "tensor_name": tensor.tensor_name,
-        }
-        target_chunk_id = (
-            "tensor:" + hashlib.sha256(canonical_json_bytes(target_identity)).hexdigest()
+        target_chunk_id = _huggingface_mixed_target_chunk_id(
+            policy.policy_hash,
+            assignment,
         )
         source_range = ByteRange(
             object_id=tensor.object_id,
@@ -587,9 +788,9 @@ def build_huggingface_mixed_plan(
     return HuggingFaceMixedPlan(
         conversion=ConversionPlan(
             source_root=catalog.source_root,
-            configuration_hash=policy_hash,
+            configuration_hash=policy.policy_hash,
             items=tuple(items),
         ),
-        policy_hash=policy_hash,
+        policy_hash=policy.policy_hash,
         tensors=tuple(planned),
     )

@@ -16,7 +16,9 @@ from ams.integrations import (
     HuggingFaceTensorAssignment,
     HuggingFaceTensorEncoding,
     build_huggingface_catalog,
+    build_huggingface_header_catalog,
     build_huggingface_mixed_plan,
+    build_huggingface_progressive_mixed_plan,
     parse_huggingface_shard_index,
 )
 from ams.mixed_conversion import execute_huggingface_mixed_conversion
@@ -39,11 +41,26 @@ class FailOnRead:
         raise AmsError(ErrorCode.IO_FAILURE, "source must not be read on restart")
 
 
+class HeaderOnlyReader:
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.size_bytes = inner.size_bytes
+        self.reads: list[tuple[int, int]] = []
+
+    def read_into(self, offset: int, destination) -> None:
+        length = memoryview(destination).nbytes
+        if (offset, length) == (0, 8) or offset == 8:
+            self.reads.append((offset, length))
+            self.inner.read_into(offset, destination)
+            return
+        raise AssertionError("structural planning attempted to read tensor payload")
+
+
 def digest(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
-def prepare_catalog(tmp_path: Path):
+def prepare_source(tmp_path: Path):
     shard_path = tmp_path / "model-00001-of-00001.safetensors"
     values = {
         "model.embed.weight": np.arange(12, dtype=np.float32).reshape(3, 4),
@@ -76,6 +93,11 @@ def prepare_catalog(tmp_path: Path):
             separators=(",", ":"),
         ).encode()
     )
+    return index, source
+
+
+def prepare_catalog(tmp_path: Path):
+    index, source = prepare_source(tmp_path)
     return build_huggingface_catalog(index, (source,), buffer_bytes=19), source
 
 
@@ -106,6 +128,42 @@ def graph_for(package_root: Path) -> GraphArtifact:
         ("causal_lm",),
         (OperatorRequirement("linear", "1.0.0"),),
     )
+
+
+def test_progressive_plan_uses_headers_only_and_matches_eager_policy_identity(
+    tmp_path: Path,
+) -> None:
+    index, source = prepare_source(tmp_path)
+    header_reader = HeaderOnlyReader(source.reader)
+    structural_source = HuggingFaceShardSource(
+        source.shard_name,
+        source.object_id,
+        source.content_hash,
+        header_reader,
+    )
+    header_catalog = build_huggingface_header_catalog(index, (structural_source,))
+    config = TernaryCodecConfig(group_size=5)
+    progressive = build_huggingface_progressive_mixed_plan(
+        header_catalog,
+        assignments(config),
+    )
+    repeated = build_huggingface_progressive_mixed_plan(
+        header_catalog,
+        assignments(config),
+    )
+    assert header_reader.reads == [(0, 8), (8, header_catalog.audit.prefix_and_header_bytes - 8)]
+    assert repeated == progressive
+
+    verified_catalog = build_huggingface_catalog(index, (source,), buffer_bytes=19)
+    eager = build_huggingface_mixed_plan(
+        verified_catalog,
+        assignments(config),
+        buffer_bytes=17,
+    )
+    assert progressive.policy_hash == eager.policy_hash
+    assert [tensor.target_chunk_id for tensor in progressive.tensors] == [
+        tensor.target_chunk_id for tensor in eager.tensors
+    ]
 
 
 def test_explicit_mixed_policy_converts_publishes_and_restarts_without_source(
