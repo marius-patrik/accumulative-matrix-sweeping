@@ -25,8 +25,8 @@ projected from parameter counts.
 | PAES public repository | `marius-patrik/PAES` `main` at `68f3bb69df81a1ecdf88cd2a7daec567ab606f27` | Original PAES 1.0.0 implementation. |
 | PAES enterprise recovery | Bundle branch `chore/enterprise-ams-integration` at `d235ac54a13828caac6129de30892d3ff4ff53a8` | Recovered protocol/conformance integration. The bundle is preserved as evidence, not treated as AMS runtime source. |
 | Missing AMS gitlink | `813d55ad985dc9d17daae08957d0853b569278bd` | Referenced by recovered PAES but absent from available Git objects. It must not be synthesized or misrepresented as recovered history. |
-| Froq personal fork | `rebrand/grok-to-froq` at `b6432a592b3872ca727321c75577d9f0f81e0371` | User-owned worktree with a large uncommitted xai-to-froq rename. Read-only until that work is committed or otherwise isolated. |
-| Froq upstream | `xai-org/grok-build` `main` at `a5727c5960452e7527a154b25cb5bf00cda0545e` | Model-agnostic harness reference. It is one commit ahead and two commits behind the current fork ancestry at this status date. |
+| Froq personal fork | `rebrand/grok-to-froq` at `9821dfe2e48c2e48b8c92244b716d1225153b606` | User-owned clean worktree containing the completed rebrand and Windows build fixes. It remains read-only during AMS reconstruction. |
+| Froq upstream | `xai-org/grok-build` `main` at `a5727c5960452e7527a154b25cb5bf00cda0545e` | Model-agnostic harness reference. It is one commit ahead and three commits behind the current fork ancestry at this status date. |
 | GLM-4.7-Flash model | `zai-org/GLM-4.7-Flash` at `7dd20894a642a0aa287e9827cb1a1f7f91386b67` | Official config, generation config, tokenizer metadata/template, README, and safetensors index are pinned locally. The config and index SHA-256 digests are `dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb` and `91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791`. Shard `model-00002-of-00048.safetensors` is pinned locally at 1,270,648,128 bytes with SHA-256 `8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1`; no other weight shard has been downloaded. |
 | GLM-5.2 model | `zai-org/GLM-5.2` at `b4734de4facf877f85769a911abafc5283eab3d9` | Official config, tokenizer metadata/template, license, README, and safetensors index are pinned locally. No weight shard has been downloaded. |
 | GLM-4-MoE-Lite reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, generated/modular model, tests, and documentation used to pin MLA, interleaved RoPE, sigmoid/noaux_tc routing, dense/sparse scheduling, and base-model treatment of MTP weights. |
@@ -218,7 +218,10 @@ The reconstruction branch currently contains:
   `response.created`, output-item/content/tool deltas, done frames, `response.completed`, and `[DONE]`;
   the Chat path emits the parallel `chat.completion.chunk` contract. Tests exercise actual HTTP, exact
   multiline reconstruction, late backend failure, overload/retry, and an unconsumed cancelled stream.
-  This is a wire/state-machine proof with an injected backend, not evidence of model-backed serving.
+  A read-only external probe compiled the current Froq fork's real `SamplingClient` and pinned
+  `async-openai` decoder, then exercised both endpoints against this adapter. Both paths reconstructed
+  the expected text byte-for-byte and accepted terminal usage of 16 tokens. The probe used a
+  deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
 Draft 2020-12, runs 133 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
@@ -257,10 +260,11 @@ non-overlapping coverage of the remaining data buffer. See the
 - The host has an up-to-date Rust MSVC toolchain and Visual Studio 2022 Build Tools with bundled
   CMake/Ninja, but no installed CUDA Toolkit or `nvcc`. CUDA code is therefore not yet buildable; the
   NVIDIA driver alone is not treated as evidence of a CUDA development environment.
-- Froq configuration remains read-only while its 2,811-entry uncommitted rebrand is in progress. Its
-  own sampler fixtures were used to pin the local Responses/Chat stream shapes. The eventual pointer is
-  a custom provider with `api_backend = "responses"` and a local `/v1` base URL, but it will not be
-  added until the protocol adapter is connected to a real AMS model backend.
+- Froq configuration remains read-only. Its own sampler fixtures were used to pin the local
+  Responses/Chat stream shapes, and its real client/decoder accepts both current fixture-backed
+  endpoints. The eventual pointer is a custom provider with `api_backend = "responses"` and a local
+  `/v1` base URL, but it will not be added until the protocol adapter is connected to a real AMS model
+  backend.
 - The protocol adapter currently rejects stored/continued Responses, background mode, hosted tools,
   multiple choices, and unsupported sampling fields instead of silently changing their semantics.
   `json_object` output requires strict duplicate-free JSON and object shape. JSON Schema intent is
