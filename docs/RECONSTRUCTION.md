@@ -148,6 +148,10 @@ The reconstruction branch currently contains:
   router, applies deterministic noaux_tc routing, reads only the selected expert and the shared expert,
   rejects insufficient scratch before the first router read, rejects incomplete expert inventories,
   and leaves caller output unchanged when the shared expert fails after routed work has completed.
+- range-streamed native sparse causal attention over separate identity K/V objects. Its 104-byte
+  fixture reads only selected vectors, never touches a declared future-token range, rejects noncausal
+  indices before I/O, accepts the same indices for IndexShare reuse, and preserves caller output on a
+  selected-value numeric failure. This is an operator proof, not yet a paged KV-cache implementation.
 - a deterministic batch-one miniature GLM-MoE-DSA prefill that composes embedding lookup, a dense
   decoder layer with a full DSA indexer, a sparse layer reusing those indices, causal attention, routed
   plus shared experts, residuals, final normalization, and LM-head logits. Its access-denial invariant
@@ -162,7 +166,7 @@ The reconstruction branch currently contains:
   is 64 bytes.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 106 Python tests, and runs 22 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 106 Python tests, and runs 24 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

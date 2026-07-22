@@ -68,6 +68,8 @@ The first native composed subgraph executes a mixed ternary/FP32/BF16 gated MLP 
 with one reusable, explicitly accounted scratch set and no matrix materialization.
 Native sparse-MoE composition now streams router logits, applies noaux_tc selection, reads only the
 selected routed experts plus the shared expert, and commits output only after the whole token succeeds.
+Sparse causal attention likewise range-reads only selected offloaded K/V vectors, accepts reused
+IndexShare indices, and uses transactional caller-owned output scratch.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,
 fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
 expert tensor. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal

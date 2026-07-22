@@ -12,6 +12,7 @@ mod glm;
 mod identity;
 mod linear;
 mod reader;
+mod sparse_attention;
 mod sparse_moe;
 mod ternary;
 
@@ -25,10 +26,14 @@ pub use glm::{
 };
 pub use identity::{
     IdentityDType, IdentityLinearPlan, IdentityScratch, IdentityScratchRequirements,
-    stream_linear_identity,
+    read_identity_vector, stream_linear_identity,
 };
 pub use linear::{LinearPlan, LinearScratch, LinearScratchRequirements, stream_linear};
 pub use reader::{FileRangeReader, RangeReader, SliceReader};
+pub use sparse_attention::{
+    SparseAttentionPlan, SparseAttentionReaders, SparseAttentionScratch,
+    SparseAttentionScratchRequirements, SparseAttentionShape, SparseKvLayout, glm_sparse_attention,
+};
 pub use sparse_moe::{
     SparseMoeBindings, SparseMoePlan, SparseMoeScratch, SparseMoeScratchRequirements,
     glm_sparse_moe,

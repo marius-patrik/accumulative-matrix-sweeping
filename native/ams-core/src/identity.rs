@@ -15,7 +15,9 @@ pub enum IdentityDType {
 }
 
 impl IdentityDType {
-    const fn item_bytes(self) -> usize {
+    /// Encoded bytes per stored scalar.
+    #[must_use]
+    pub const fn item_bytes(self) -> usize {
         match self {
             Self::Float16 | Self::BFloat16 => 2,
             Self::Float32 => 4,
@@ -232,6 +234,58 @@ fn decode_identity(encoded: &[u8], index: usize, dtype: IdentityDType) -> Result
         ));
     }
     Ok(value)
+}
+
+/// Read one complete FP16, BF16, or FP32 vector into caller-owned FP64 output.
+///
+/// The output remains scratch until this function succeeds; its caller controls visibility.
+///
+/// # Errors
+///
+/// Returns a typed plan, capacity, storage, or numeric error.
+pub fn read_identity_vector<R>(
+    reader: &R,
+    offset: u64,
+    dtype: IdentityDType,
+    output: &mut [f64],
+    encoded: &mut [u8],
+) -> Result<(), AmsError>
+where
+    R: RangeReader + ?Sized,
+{
+    if output.is_empty() {
+        return Err(AmsError::new(
+            ErrorCode::PlanInvalid,
+            "identity vector must contain an element",
+        ));
+    }
+    let byte_count = mul(
+        output.len(),
+        dtype.item_bytes(),
+        "identity vector bytes overflow",
+    )?;
+    if encoded.len() < byte_count {
+        return Err(AmsError::new(
+            ErrorCode::PreflightNoWorkingSet,
+            "identity vector scratch is smaller than the admitted read",
+        ));
+    }
+    if add_u64(
+        offset,
+        usize_to_u64(byte_count, "identity vector size exceeds u64")?,
+        "identity vector range overflows u64",
+    )? > reader.len()
+    {
+        return Err(AmsError::new(
+            ErrorCode::IoFailure,
+            "identity vector exceeds the storage object",
+        ));
+    }
+    reader.read_exact_at(offset, &mut encoded[..byte_count])?;
+    for (index, destination) in output.iter_mut().enumerate() {
+        *destination = f64::from(decode_identity(&encoded[..byte_count], index, dtype)?);
+    }
+    Ok(())
 }
 
 /// Execute matrix-vector multiplication from FP16, BF16, or FP32 storage without allocation.
