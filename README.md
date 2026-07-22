@@ -60,9 +60,11 @@ exactly while ternarizing selected tensors in the same journaled, schema-valid p
 complete GLM inference engine or a model-backed OpenAI-compatible service, and the ternary codec is not
 a default quality policy. The CPU semantic oracle can multiply directly from grouped ternary storage with bounded
 encoded-group, decoded-group, and output-row tiles; it never reconstructs the matrix in full. A
-dependency-free Rust native core now implements the same codec and direct linear path using exclusively
-caller-owned scratch buffers, plus allocation-free identity linear execution directly from FP16,
-BF16, or FP32 storage. It also pins allocation-free RMSNorm, LayerNorm, SiLU, softmax, both GLM
+dependency-free Rust native core now implements direct ternary and symmetric-INT4 linear paths using
+exclusively caller-owned scratch buffers, plus allocation-free identity linear execution directly from
+FP16, BF16, or FP32 storage. Its INT4 path validates nibbles in place and performs the stored FP32-scale
+multiply in FP64, matching the Python v1 semantics without a decoded-group buffer. It also pins
+allocation-free RMSNorm, LayerNorm, SiLU, softmax, both GLM
 rotary layouts, causal DSA top-k, and noaux_tc expert routing with caller-owned outputs and scratch.
 The first native composed subgraph executes a mixed ternary/FP32/BF16 gated MLP from range readers
 with one reusable, explicitly accounted scratch set and no matrix materialization.
@@ -108,7 +110,8 @@ resumes completed and pending transactions without source rereads, rejects orpha
 and journals only verified output. Eager and shard-progressive mixed plans now identify its exact
 configuration, publish schema-valid manifests, and reload it through a bounded Python direct-linear
 path; a miniature GLM pass mixes identity, ternary, and INT4 storage with full-decode parity. INT4 is
-still opt-in: native execution and quality qualification remain before any GLM precision policy.
+still opt-in: hardware-optimized execution and quality qualification remain before any GLM precision
+policy.
 The production DSA selector scans offloaded causal index keys while retaining only top-k state, so its
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,

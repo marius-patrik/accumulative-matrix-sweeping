@@ -186,7 +186,7 @@ impl<'a> GatedMlpScratch<'a> {
     }
 }
 
-/// Execute one GLM gated MLP directly from mixed identity or ternary storage.
+/// Execute one GLM gated MLP directly from reviewed mixed linear storage.
 ///
 /// # Errors
 ///

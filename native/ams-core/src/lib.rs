@@ -13,6 +13,7 @@ mod glm;
 mod glm4_dense_layer;
 mod glm4_mla;
 mod identity;
+mod int4;
 mod kv_cache;
 mod linear;
 mod reader;
@@ -44,6 +45,10 @@ pub use glm4_mla::{
 pub use identity::{
     IdentityDType, IdentityLinearPlan, IdentityScratch, IdentityScratchRequirements,
     read_identity_vector, stream_linear_identity,
+};
+pub use int4::{
+    Int4Config, Int4LinearPlan, Int4Scratch, Int4ScratchRequirements, decode_int4_group,
+    stream_linear_int4,
 };
 pub use kv_cache::{KvCache, KvCachePlan, KvCacheRequirements, KvCacheView};
 pub use linear::{LinearPlan, LinearScratch, LinearScratchRequirements, stream_linear};

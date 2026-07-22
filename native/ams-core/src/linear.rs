@@ -1,7 +1,8 @@
 use crate::checked::{add, mul};
 use crate::{
-    AmsError, ErrorCode, IdentityLinearPlan, IdentityScratch, RangeReader, TernaryLinearPlan,
-    TernaryScratch, stream_linear_identity, stream_linear_ternary,
+    AmsError, ErrorCode, IdentityLinearPlan, IdentityScratch, Int4LinearPlan, Int4Scratch,
+    RangeReader, TernaryLinearPlan, TernaryScratch, stream_linear_identity, stream_linear_int4,
+    stream_linear_ternary,
 };
 
 /// One reviewed storage-specific linear plan behind the native execution boundary.
@@ -11,6 +12,8 @@ pub enum LinearPlan {
     Identity(IdentityLinearPlan),
     /// Grouped trit5 ternary storage with FP32 scales.
     Ternary(TernaryLinearPlan),
+    /// Grouped symmetric signed INT4 storage with FP32 scales.
+    Int4(Int4LinearPlan),
 }
 
 impl LinearPlan {
@@ -20,6 +23,7 @@ impl LinearPlan {
         match self {
             Self::Identity(plan) => plan.rows(),
             Self::Ternary(plan) => plan.rows(),
+            Self::Int4(plan) => plan.rows(),
         }
     }
 
@@ -29,6 +33,7 @@ impl LinearPlan {
         match self {
             Self::Identity(plan) => plan.columns(),
             Self::Ternary(plan) => plan.columns(),
+            Self::Int4(plan) => plan.columns(),
         }
     }
 
@@ -38,6 +43,7 @@ impl LinearPlan {
         match self {
             Self::Identity(plan) => plan.reader_end(),
             Self::Ternary(plan) => plan.reader_end(),
+            Self::Int4(plan) => plan.reader_end(),
         }
     }
 
@@ -65,6 +71,16 @@ impl LinearPlan {
                     total_bytes: requirement.total_bytes,
                 }
             }
+            Self::Int4(plan) => {
+                let requirement = plan.scratch();
+                LinearScratchRequirements {
+                    encoded_bytes: requirement.encoded_bytes,
+                    decoded_elements: requirement.decoded_elements,
+                    accumulator_elements: requirement.accumulator_elements,
+                    local_bytes: 0,
+                    total_bytes: requirement.total_bytes,
+                }
+            }
         }
     }
 }
@@ -78,6 +94,12 @@ impl From<IdentityLinearPlan> for LinearPlan {
 impl From<TernaryLinearPlan> for LinearPlan {
     fn from(plan: TernaryLinearPlan) -> Self {
         Self::Ternary(plan)
+    }
+}
+
+impl From<Int4LinearPlan> for LinearPlan {
+    fn from(plan: Int4LinearPlan) -> Self {
+        Self::Int4(plan)
     }
 }
 
@@ -140,7 +162,7 @@ impl LinearScratchRequirements {
     }
 }
 
-/// Reusable caller-owned regions for identity or ternary linear execution.
+/// Reusable caller-owned regions for identity, ternary, or INT4 linear execution.
 pub struct LinearScratch<'a> {
     encoded: &'a mut [u8],
     decoded: &'a mut [f32],
@@ -170,7 +192,7 @@ impl<'a> LinearScratch<'a> {
     }
 }
 
-/// Execute one identity or ternary matrix-vector multiplication into caller output.
+/// Execute one reviewed storage-specific matrix-vector multiplication into caller output.
 ///
 /// # Errors
 ///
@@ -233,5 +255,65 @@ pub fn stream_linear(
                 },
             )
         }
+        LinearPlan::Int4(int4_plan) => {
+            let mut int4_scratch =
+                Int4Scratch::new(&mut *scratch.encoded, &mut *scratch.accumulators);
+            stream_linear_int4(
+                reader,
+                int4_plan,
+                input,
+                bias,
+                &mut int4_scratch,
+                |row, value| {
+                    output[row] = value;
+                    Ok(())
+                },
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{IdentityDType, Int4Config, SliceReader};
+
+    fn known_int4_record() -> [u8; 8] {
+        let mut record = [0u8; 8];
+        record[..4].copy_from_slice(&(8.0f32 / 7.0).to_le_bytes());
+        record[4..].copy_from_slice(&[0xd9, 0x0f, 0x31, 0x07]);
+        record
+    }
+
+    #[test]
+    fn int4_dispatch_and_union_use_the_shared_scratch_contract() -> Result<(), AmsError> {
+        let int4: LinearPlan = Int4LinearPlan::from_arena(1, 7, 0, 16, Int4Config::new(7)?)?.into();
+        let identity: LinearPlan =
+            IdentityLinearPlan::from_arena(1, 1, 0, 12, IdentityDType::Float32)?.into();
+        let combined = int4.scratch().union(identity.scratch())?;
+        assert_eq!(combined.encoded_bytes, 8);
+        assert_eq!(combined.decoded_elements, 0);
+        assert_eq!(combined.accumulator_elements, 1);
+        assert_eq!(combined.local_bytes, 8);
+        assert_eq!(combined.total_bytes, 24);
+
+        let payload = known_int4_record();
+        let reader = SliceReader::new(&payload);
+        let mut encoded = [0u8; 8];
+        let mut decoded = [0.0f32; 0];
+        let mut accumulators = [0.0f64; 1];
+        let mut scratch = LinearScratch::new(&mut encoded, &mut decoded, &mut accumulators);
+        let mut output = [0.0f64; 1];
+        stream_linear(
+            &reader,
+            int4,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            None,
+            &mut scratch,
+            &mut output,
+        )?;
+        let expected = f64::from(8.0f32 / 7.0) * 56.0;
+        assert!((output[0] - expected).abs() <= f64::EPSILON);
+        Ok(())
     }
 }

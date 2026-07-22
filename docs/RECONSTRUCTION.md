@@ -116,17 +116,20 @@ The reconstruction branch currently contains:
   pending-record protocol that recovers the post-transform/pre-journal crash window without rereading
   the source tensor;
 - an explicit mixed-policy planner that requires exactly one assignment for every source tensor and
-  can publish identity and ternary layouts together under one policy hash, conversion journal,
-  schema-valid manifest, and atomic package root;
+  can publish identity, ternary, and symmetric-INT4 layouts together under one policy hash, conversion
+  journal, schema-valid manifest, and atomic package root;
 - a scalar source-order FP16/BF16/FP32 identity linear oracle that streams weights and emits one
   output at a time;
 - a direct ternary linear oracle that reads and validates one encoded group, decodes one bounded group,
   accumulates a bounded output-row tile, and matches source-order multiplication over the trusted full
   decoder without reconstructing the parameter matrix.
+- a direct symmetric-INT4 linear oracle with the same bounded range contract. The native path validates
+  low-first signed nibbles in place and multiplies the stored FP32 scale in FP64, so it matches the
+  Python v1 decoder without a decoded-group scratch buffer.
 - a dependency-free, `unsafe`-forbidden Rust core with the complete normative error-code spellings,
-  checked in-memory and nonsymlink regular-file positional reads, ternary group decode, arena preflight,
-  direct ternary linear execution, and FP16/BF16/FP32 identity linear execution using caller-owned
-  scratch; native format/check/test/strict-Clippy gates pass on the Windows MSVC toolchain.
+  checked in-memory and nonsymlink regular-file positional reads, ternary and INT4 decode, arena
+  preflight, direct low-bit linear execution, and FP16/BF16/FP32 identity linear execution using
+  caller-owned scratch; native format/check/test/strict-Clippy gates pass on the Windows MSVC toolchain.
 - a bounded, duplicate-key-rejecting GLM-MoE-DSA architecture parser and fail-closed tensor inventory
   that distinguishes dense layers, shared experts, every routed expert, full/shared DSA indexers, and
   MTP tensors. The generated 59,585-name inventory exactly matches the pinned official GLM-5.2 index:
@@ -155,8 +158,9 @@ The reconstruction branch currently contains:
   full-hash-verifies one immutable shard before exposing a local reader, reuses a completed lease
   without remote I/O, leaves a failed-hash object unpublished, and releases only the exact object path
   under a validated cache marker. A real 1,270,648,128-byte GLM-4.7 shard completed stage and guarded
-  release with a fixed 4 MiB buffer. This establishes one-shard source residency; progressive mixed
-  conversion and its global journal still need to consume the lease before GLM-5.2 conversion begins.
+  release with a fixed 4 MiB buffer. Progressive mixed conversion now consumes this lease while keeping
+  source residency to one shard; GLM-5.2 conversion still requires complete official source hashes and
+  a qualified precision policy.
 - an explicitly structural header catalog and progressive mixed plan. The catalog validates every
   header, index mapping, total-size interpretation, expected shard hash, and source size without
   reading tensor payloads or claiming those payload hashes have been verified. The progressive plan
@@ -187,7 +191,9 @@ The reconstruction branch currently contains:
   selected INT4 configuration in their stable identities and publish `ams.codec.int4.symmetric.v1`
   layouts. The package reader validates that declaration and executes matrices directly from bounded
   group records; a miniature GLM pass has full-decode parity while mixing identity, ternary, and INT4
-  tensors. This remains experimental and opt-in: native direct linear execution and quality
+  tensors. The allocation-free native scalar path shares the mixed-linear dispatch and exact scratch
+  union, rejects reserved codes/padding, and matches both the single-group and multi-group Python
+  fixtures. This remains experimental and opt-in: hardware-optimized execution and quality
   qualification remain required before a GLM precision policy may select it.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
@@ -203,7 +209,8 @@ The reconstruction branch currently contains:
   ternary gate, FP32 up projection, and BF16 down projection through one reusable scratch set, matches
   a materialized source-order reference, rejects non-finite inputs before storage reads, and accounts
   for a 136-byte logical high-water: 56 bytes of mixed-linear state plus two five-element FP64
-  intermediates.
+  intermediates. The same dispatch now admits symmetric INT4, and its union test proves an eight-byte
+  encoded group plus one FP64 accumulator and the identity path's local scalar require 24 bytes.
 - allocation-free native sparse-MoE composition for one token. Its 200-byte fixture proof streams the
   router, applies deterministic noaux_tc routing, reads only the selected expert and the shared expert,
   rejects insufficient scratch before the first router read, rejects incomplete expert inventories,
@@ -270,7 +277,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 173 Python tests, and runs 39 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 173 Python tests, and runs 47 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
