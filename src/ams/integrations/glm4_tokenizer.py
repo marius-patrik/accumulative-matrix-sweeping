@@ -556,6 +556,77 @@ class _TokenizerEngine(Protocol):
     def get_vocab_size(self, with_added_tokens: bool = True) -> int: ...
 
 
+class _StreamingDecoder(Protocol):
+    def step(self, tokenizer: _TokenizerEngine, token_id: int) -> str | None: ...
+
+
+class Glm4TokenizerDecodeStream:
+    """Exact incremental decode with a final full-decode consistency check."""
+
+    def __init__(
+        self,
+        runtime: Glm4TokenizerRuntime,
+        decoder: _StreamingDecoder,
+        *,
+        skip_special_tokens: bool,
+    ) -> None:
+        self._runtime = runtime
+        self._decoder = decoder
+        self._skip_special_tokens = skip_special_tokens
+        self._token_ids: list[int] = []
+        self._chunks: list[str] = []
+        self._finished = False
+
+    def push(self, token_id: int) -> str | None:
+        if self._finished:
+            raise AmsError(
+                ErrorCode.INTERNAL_INVARIANT,
+                "cannot append to a finished GLM decode stream",
+                subsystem="glm4_tokenizer",
+            )
+        self._runtime._validate_decode_token(token_id)
+        try:
+            chunk = self._decoder.step(self._runtime._engine, token_id)
+        except Exception as exc:
+            raise AmsError(
+                ErrorCode.BACKEND_FAILURE,
+                "tokenizers failed to stream-decode GLM output",
+                subsystem="glm4_tokenizer",
+            ) from exc
+        if chunk is not None and (not isinstance(chunk, str) or not chunk):
+            raise AmsError(
+                ErrorCode.BACKEND_FAILURE,
+                "tokenizers returned an invalid GLM decode chunk",
+                subsystem="glm4_tokenizer",
+            )
+        self._token_ids.append(token_id)
+        if chunk is not None:
+            self._chunks.append(chunk)
+        return chunk
+
+    def finish(self) -> str | None:
+        if self._finished:
+            raise AmsError(
+                ErrorCode.INTERNAL_INVARIANT,
+                "GLM decode stream was finished more than once",
+                subsystem="glm4_tokenizer",
+            )
+        self._finished = True
+        complete = self._runtime.decode(
+            self._token_ids,
+            skip_special_tokens=self._skip_special_tokens,
+        )
+        streamed = "".join(self._chunks)
+        if not complete.startswith(streamed):
+            raise AmsError(
+                ErrorCode.BACKEND_FAILURE,
+                "streaming GLM decode diverged from complete decode",
+                subsystem="glm4_tokenizer",
+            )
+        suffix = complete[len(streamed) :]
+        return suffix or None
+
+
 def _load_tokenizer_engine(path: Path) -> _TokenizerEngine:
     try:
         tokenizers = importlib.import_module("tokenizers")
@@ -850,18 +921,8 @@ class Glm4TokenizerRuntime:
         skip_special_tokens: bool = False,
     ) -> str:
         copied = list(token_ids)
-        if any(
-            not isinstance(token_id, int)
-            or isinstance(token_id, bool)
-            or token_id < 0
-            or token_id >= self.assets.tokenizer_vocab_size
-            for token_id in copied
-        ):
-            raise AmsError(
-                ErrorCode.PLAN_INVALID,
-                "cannot decode an unmapped GLM model token",
-                subsystem="glm4_tokenizer",
-            )
+        for token_id in copied:
+            self._validate_decode_token(token_id)
         try:
             return self._engine.decode(copied, skip_special_tokens=bool(skip_special_tokens))
         except Exception as exc:
@@ -870,3 +931,44 @@ class Glm4TokenizerRuntime:
                 "tokenizers failed to decode GLM output",
                 subsystem="glm4_tokenizer",
             ) from exc
+
+    def _validate_decode_token(self, token_id: int) -> None:
+        if (
+            not isinstance(token_id, int)
+            or isinstance(token_id, bool)
+            or token_id < 0
+            or token_id >= self.assets.tokenizer_vocab_size
+        ):
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "cannot decode an unmapped GLM model token",
+                subsystem="glm4_tokenizer",
+            )
+
+    def start_decode_stream(
+        self,
+        *,
+        skip_special_tokens: bool = False,
+    ) -> Glm4TokenizerDecodeStream:
+        try:
+            tokenizers = importlib.import_module("tokenizers")
+            decoder = tokenizers.decoders.DecodeStream(
+                skip_special_tokens=bool(skip_special_tokens)
+            )
+        except (ImportError, AttributeError, TypeError) as exc:
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "the pinned tokenizers runtime does not expose DecodeStream",
+                subsystem="glm4_tokenizer",
+            ) from exc
+        if getattr(tokenizers, "__version__", None) != _TOKENIZERS_VERSION:
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                f"GLM tokenizer runtime requires tokenizers {_TOKENIZERS_VERSION}",
+                subsystem="glm4_tokenizer",
+            )
+        return Glm4TokenizerDecodeStream(
+            self,
+            decoder,
+            skip_special_tokens=bool(skip_special_tokens),
+        )

@@ -32,6 +32,7 @@ from ams.api.generation import (
     ToolArgumentsDelta,
     ToolCallStart,
 )
+from ams.api.glm4_native_backend import Glm4NativeBackend, Glm4NativeBackendConfig
 from ams.api.openai_stream import OpenAIStreamSession, ResponseIdentity, sse_data
 from ams.api.server import (
     ApplicationResponse,
@@ -55,6 +56,8 @@ __all__ = [
     "GenerationEvent",
     "GenerationSnapshot",
     "GenerationUsage",
+    "Glm4NativeBackend",
+    "Glm4NativeBackendConfig",
     "InferenceBackend",
     "InputItem",
     "ManagedStream",

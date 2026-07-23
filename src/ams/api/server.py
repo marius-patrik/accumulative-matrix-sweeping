@@ -322,40 +322,45 @@ class OpenAIApplication:
     ) -> Iterator[GenerationEvent]:
         iterator = iter(self.backend.stream(request, cancellation))
         try:
-            pending = next(iterator)
-        except StopIteration:
-            raise AmsError(
-                ErrorCode.BACKEND_FAILURE,
-                "local inference backend returned an empty stream",
-                retriable=True,
-                phase="decode",
-                subsystem="openai-api",
-            ) from None
-        while True:
-            if cancellation.is_set():
-                raise AmsError(
-                    ErrorCode.CANCELLED,
-                    "request was cancelled",
-                    phase="decode",
-                    subsystem="openai-api",
-                )
-            if isinstance(pending, GenerationCompleted):
-                try:
-                    next(iterator)
-                except StopIteration:
-                    yield pending
-                    break
-                raise AmsError(
-                    ErrorCode.INTERNAL_INVARIANT,
-                    "backend emitted an event after completion",
-                    phase="decode",
-                    subsystem="openai-api",
-                )
-            yield pending
             try:
                 pending = next(iterator)
             except StopIteration:
-                break
+                raise AmsError(
+                    ErrorCode.BACKEND_FAILURE,
+                    "local inference backend returned an empty stream",
+                    retriable=True,
+                    phase="decode",
+                    subsystem="openai-api",
+                ) from None
+            while True:
+                if cancellation.is_set():
+                    raise AmsError(
+                        ErrorCode.CANCELLED,
+                        "request was cancelled",
+                        phase="decode",
+                        subsystem="openai-api",
+                    )
+                if isinstance(pending, GenerationCompleted):
+                    try:
+                        next(iterator)
+                    except StopIteration:
+                        yield pending
+                        break
+                    raise AmsError(
+                        ErrorCode.INTERNAL_INVARIANT,
+                        "backend emitted an event after completion",
+                        phase="decode",
+                        subsystem="openai-api",
+                    )
+                yield pending
+                try:
+                    pending = next(iterator)
+                except StopIteration:
+                    break
+        finally:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
 
     def _stream_chunks(
         self,

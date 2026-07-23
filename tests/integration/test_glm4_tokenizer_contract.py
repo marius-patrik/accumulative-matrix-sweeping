@@ -259,3 +259,17 @@ def test_runtime_rejects_nonfinite_chat_values(tmp_path: Path) -> None:
     with pytest.raises(AmsError) as error:
         runtime.render_chat([{"role": "user", "content": float("nan")}])
     assert error.value.code is ErrorCode.PLAN_INVALID
+
+
+def test_runtime_decode_stream_matches_complete_decode(tmp_path: Path) -> None:
+    policy = write_fixture(tmp_path)
+    assets = admit_glm4_tokenizer_assets(tmp_path, policy=policy)
+    runtime = Glm4TokenizerRuntime(
+        assets,
+        _load_tokenizer_engine(assets.tokenizer_path),
+        _compile_template(assets.template),
+    )
+    stream = runtime.start_decode_stream()
+    chunks = [stream.push(token_id) for token_id in (0, 4, 1)]
+    suffix = stream.finish()
+    assert "".join(chunk or "" for chunk in (*chunks, suffix)) == runtime.decode((0, 4, 1))

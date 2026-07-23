@@ -883,6 +883,8 @@ def test_mini_glm4_native_worker_process_streams_cancels_and_retries(
         ready = receive()
         assert ready["schema_id"] == "ams.native.worker.ready.v1"
         assert ready["evidence"]["binding_hash"] == plan.binding_hash
+        assert ready["context_capacity_tokens"] == 16
+        assert ready["tokenizer_vocabulary_size"] == 8
         assert process.poll() is None
 
         send(
@@ -922,6 +924,7 @@ def test_mini_glm4_native_worker_process_streams_cancels_and_retries(
             "scratch_logical_bytes": 2155,
         }
 
+        send({"schema_id": "ams.native.worker.cancel.v1", "request_id": 1})
         send(
             {
                 "schema_id": "ams.native.worker.generate.v1",

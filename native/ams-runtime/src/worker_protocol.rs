@@ -71,10 +71,18 @@ struct ActiveRequest {
     cancellation: Arc<AtomicBool>,
 }
 
+#[derive(Default)]
+struct RequestState {
+    active: Option<ActiveRequest>,
+    last_terminal_request_id: Option<u64>,
+}
+
 #[derive(Serialize)]
 struct ReadyFrame<'a> {
     schema_id: &'static str,
     evidence: &'a Glm4AdmissionEvidence,
+    context_capacity_tokens: usize,
+    tokenizer_vocabulary_size: usize,
 }
 
 #[derive(Serialize)]
@@ -262,11 +270,12 @@ fn parse_input(frame: &[u8]) -> Result<WorkerInput, RuntimeError> {
 }
 
 fn clear_active(
-    active: &Mutex<Option<ActiveRequest>>,
+    active: &Mutex<RequestState>,
     request_id: u64,
-) -> Result<MutexGuard<'_, Option<ActiveRequest>>, RuntimeError> {
+) -> Result<MutexGuard<'_, RequestState>, RuntimeError> {
     let state = lock(active, "native worker request-state lock was poisoned")?;
     if state
+        .active
         .as_ref()
         .is_none_or(|current| current.request_id != request_id)
     {
@@ -280,11 +289,14 @@ fn clear_active(
 
 fn request_shutdown(
     sender: &SyncSender<WorkerCommand>,
-    active: &Mutex<Option<ActiveRequest>>,
+    active: &Mutex<RequestState>,
     shutting_down: &AtomicBool,
 ) -> Result<(), RuntimeError> {
     shutting_down.store(true, Ordering::Release);
-    if let Some(current) = lock(active, "native worker request-state lock was poisoned")?.as_ref() {
+    if let Some(current) = lock(active, "native worker request-state lock was poisoned")?
+        .active
+        .as_ref()
+    {
         current.cancellation.store(true, Ordering::Release);
     }
     sender.send(WorkerCommand::Shutdown).map_err(|_| {
@@ -299,7 +311,7 @@ fn request_shutdown(
 fn read_commands(
     sender: &SyncSender<WorkerCommand>,
     output: &Arc<Mutex<io::Stdout>>,
-    active: &Arc<Mutex<Option<ActiveRequest>>>,
+    active: &Arc<Mutex<RequestState>>,
     shutting_down: &Arc<AtomicBool>,
 ) -> Result<(), RuntimeError> {
     let mut reader = BufReader::new(io::stdin());
@@ -350,7 +362,7 @@ fn read_commands(
                 let cancellation = Arc::new(AtomicBool::new(false));
                 {
                     let mut state = lock(active, "native worker request-state lock was poisoned")?;
-                    if state.is_some() {
+                    if state.active.is_some() {
                         write_error(
                             output,
                             Some(request_id),
@@ -361,7 +373,7 @@ fn read_commands(
                         )?;
                         continue;
                     }
-                    *state = Some(ActiveRequest {
+                    state.active = Some(ActiveRequest {
                         request_id,
                         cancellation: Arc::clone(&cancellation),
                     });
@@ -374,7 +386,7 @@ fn read_commands(
                 };
                 if let Err(send_error) = sender.try_send(command) {
                     let mut state = lock(active, "native worker request-state lock was poisoned")?;
-                    *state = None;
+                    state.active = None;
                     drop(state);
                     match send_error {
                         TrySendError::Full(_) => write_error(
@@ -396,10 +408,11 @@ fn read_commands(
             }
             WorkerInput::Cancel { request_id } => {
                 let state = lock(active, "native worker request-state lock was poisoned")?;
-                match state.as_ref() {
+                match state.active.as_ref() {
                     Some(current) if current.request_id == request_id => {
                         current.cancellation.store(true, Ordering::Release);
                     }
+                    None if state.last_terminal_request_id == Some(request_id) => {}
                     _ => write_error(
                         output,
                         Some(request_id),
@@ -431,10 +444,12 @@ pub fn run_glm4_worker_stdio(binding: &AdmittedGlm4Binding) -> Result<(), Runtim
         &ReadyFrame {
             schema_id: "ams.native.worker.ready.v1",
             evidence: binding.evidence(),
+            context_capacity_tokens: binding.context_capacity_tokens(),
+            tokenizer_vocabulary_size: binding.tokenizer_vocabulary_size(),
         },
     )?;
 
-    let active = Arc::new(Mutex::new(None));
+    let active = Arc::new(Mutex::new(RequestState::default()));
     let shutting_down = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = mpsc::sync_channel(1);
     let reader_output = Arc::clone(&output);
@@ -487,7 +502,8 @@ pub fn run_glm4_worker_stdio(binding: &AdmittedGlm4Binding) -> Result<(), Runtim
                     ),
                     Err(error) => write_error(&output, Some(request_id), error),
                 };
-                *state = None;
+                state.active = None;
+                state.last_terminal_request_id = Some(request_id);
                 drop(state);
                 if let Err(error) = terminal {
                     cancellation.store(true, Ordering::Release);
@@ -499,7 +515,9 @@ pub fn run_glm4_worker_stdio(binding: &AdmittedGlm4Binding) -> Result<(), Runtim
         }
     }
     shutting_down.store(true, Ordering::Release);
-    if let Some(current) = lock(&active, "native worker request-state lock was poisoned")?.as_ref()
+    if let Some(current) = lock(&active, "native worker request-state lock was poisoned")?
+        .active
+        .as_ref()
     {
         current.cancellation.store(true, Ordering::Release);
     }

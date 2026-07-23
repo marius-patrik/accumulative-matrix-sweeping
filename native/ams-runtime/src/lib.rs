@@ -244,6 +244,18 @@ impl AdmittedGlm4Binding {
         &self.evidence
     }
 
+    /// Fixed context capacity bound into the admitted model plan.
+    #[must_use]
+    pub const fn context_capacity_tokens(&self) -> usize {
+        self.plan.model_plan().context_capacity_tokens()
+    }
+
+    /// Tokenizer-mapped vocabulary eligible for native output selection.
+    #[must_use]
+    pub const fn tokenizer_vocabulary_size(&self) -> usize {
+        self.plan.model_plan().tokenizer_vocabulary_size()
+    }
+
     /// Execute an operation against the plan and exact retained reader topology.
     ///
     /// # Errors
