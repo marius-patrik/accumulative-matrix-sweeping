@@ -326,8 +326,17 @@ The reconstruction branch currently contains:
   binding becomes observable after a partial failure. The cross-language miniature package verifies
   52 objects containing all 61 tensors (35 executable and 26 separately marked MTP), and deliberate
   object corruption returns `INTEGRITY_FAILURE`; restoring the exact bytes makes a repeated command
-  produce identical evidence. Owned caches/scratch and generation are the remaining wrapper layer;
-  native admission alone is not yet model execution.
+  produce identical evidence. The `ams-runtime generate` boundary now creates exact typed cache and
+  scratch ownership from the admitted native plan using fallible allocations, retains Rust session
+  and cache state as authoritative, and executes a bounded greedy token-ID request through the same
+  verified handles. The mixed identity/ternary/INT4 miniature independently matches the Python
+  low-bit oracle at output `[7, 1]`; its evidence is 192 cache heap bytes, 2,107 scratch heap bytes,
+  2,155 logical scratch bytes, three state-machine steps, and three committed cache positions. The
+  terminal length token is emitted but not consumed into cache. Unknown request fields and
+  over-capacity requests fail closed, and a valid retry is byte-for-byte deterministic. The boundary
+  still starts a new process and allocates fresh state per request; tokenizer integration, a
+  persistent broker, OpenAI protocol translation, streaming, exposed cancellation, sampling, and
+  cache reuse remain open.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal

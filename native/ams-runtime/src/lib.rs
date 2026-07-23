@@ -14,6 +14,10 @@ use ams_core::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub(crate) mod owned;
+
+use owned::{CacheStorage, ModelScratchStorage};
+
 const MAX_ENVELOPE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_VERIFICATION_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 const BINDING_SCHEMA: &str = "ams.native.glm4-binding.v1";
@@ -202,7 +206,33 @@ pub struct Glm4AdmissionEvidence {
 pub struct AdmittedGlm4Binding {
     plan: Glm4BoundModelPlan,
     readers: Vec<FileRangeReader>,
+    eos_token_ids: Vec<usize>,
     evidence: Glm4AdmissionEvidence,
+}
+
+/// Complete deterministic output and resource evidence from one native greedy request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Glm4GreedyOutput {
+    /// Output schema.
+    pub schema_id: &'static str,
+    /// Exact admitted binding identity.
+    pub binding_hash: String,
+    /// Prompt tokens consumed into every layer cache.
+    pub prompt_tokens: usize,
+    /// Non-EOS output tokens exposed in order.
+    pub output_token_ids: Vec<usize>,
+    /// Terminal reason (`end_of_sequence` or `length`).
+    pub finish_reason: &'static str,
+    /// Model inputs committed to every layer cache.
+    pub committed_cache_tokens: usize,
+    /// Number of observable state-machine transitions.
+    pub generation_steps: usize,
+    /// Exact fixed K/V heap allocation.
+    pub cache_heap_bytes: usize,
+    /// Exact typed scratch heap allocation, excluding allocator metadata and stack locals.
+    pub scratch_heap_bytes: usize,
+    /// Plan-declared simultaneous logical scratch, including native stack-local allowances.
+    pub scratch_logical_bytes: usize,
 }
 
 impl AdmittedGlm4Binding {
@@ -222,18 +252,145 @@ impl AdmittedGlm4Binding {
         operation: impl FnOnce(
             &ams_core::Glm4ModelPlan,
             &Glm4ModelReaders<'_, '_, '_>,
-        ) -> Result<T, AmsError>,
+        ) -> Result<T, RuntimeError>,
     ) -> Result<T, RuntimeError> {
-        let readers: Vec<&dyn RangeReader> = self
-            .readers
-            .iter()
-            .map(|reader| reader as &dyn RangeReader)
-            .collect();
+        let mut readers: Vec<&dyn RangeReader> = Vec::new();
+        readers.try_reserve_exact(self.readers.len()).map_err(|_| {
+            RuntimeError::new(
+                ErrorCode::PreflightNoWorkingSet,
+                "native reader-topology allocation failed",
+            )
+        })?;
+        readers.extend(self.readers.iter().map(|reader| reader as &dyn RangeReader));
+        let mut outcome = None;
         self.plan
             .with_readers(&readers, |model_readers| {
-                operation(self.plan.model_plan(), model_readers)
+                outcome = Some(operation(self.plan.model_plan(), model_readers));
+                Ok(())
             })
-            .map_err(Into::into)
+            .map_err(RuntimeError::from)?;
+        outcome.ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::InternalInvariant,
+                "native reader callback did not publish an outcome",
+            )
+        })?
+    }
+
+    /// Execute one bounded deterministic greedy request with fresh exact-sized cache state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed resource, token-policy, storage, codec, numeric, or execution failure.
+    #[allow(clippy::too_many_lines)] // One request owns admission, state, resources, and commit order.
+    pub fn generate_greedy(
+        &self,
+        prompt_token_ids: &[usize],
+        max_new_tokens: usize,
+    ) -> Result<Glm4GreedyOutput, RuntimeError> {
+        let binding_hash = self.evidence.binding_hash.clone();
+        let eos_token_ids = &self.eos_token_ids;
+        let evidence = &self.evidence;
+        self.with_model(|plan, readers| {
+            let mut session = ams_core::Glm4GreedySession::new(
+                plan,
+                prompt_token_ids,
+                eos_token_ids,
+                max_new_tokens,
+            )?;
+            let cache_plan = plan.decoder().cache_plan();
+            let mut cache_storage =
+                CacheStorage::allocate_all(cache_plan, plan.decoder().layer_count())?;
+            let cache_heap_bytes = CacheStorage::heap_bytes(&cache_storage)?;
+            let mut caches = CacheStorage::bind_all(&mut cache_storage, cache_plan)?;
+            let mut scratch_storage = ModelScratchStorage::new(plan)?;
+            let scratch_heap_bytes = scratch_storage.heap_bytes()?;
+            let scratch_logical_bytes = evidence
+                .model_local_scratch_bytes
+                .checked_add(evidence.dense_layer_scratch_bytes)
+                .and_then(|value| value.checked_add(evidence.sparse_layer_scratch_bytes))
+                .ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorCode::InternalInvariant,
+                        "native logical scratch evidence overflowed",
+                    )
+                })?;
+            let mut output_token_ids = Vec::new();
+            output_token_ids
+                .try_reserve_exact(max_new_tokens)
+                .map_err(|_| {
+                    RuntimeError::new(
+                        ErrorCode::PreflightNoWorkingSet,
+                        "native output-token allocation failed",
+                    )
+                })?;
+            let maximum_steps = prompt_token_ids
+                .len()
+                .checked_add(max_new_tokens)
+                .ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorCode::PlanInvalid,
+                        "native generation step bound overflowed",
+                    )
+                })?;
+            let mut generation_steps = 0usize;
+            let finish_reason = loop {
+                if generation_steps >= maximum_steps {
+                    return Err(RuntimeError::new(
+                        ErrorCode::InternalInvariant,
+                        "native generation exceeded its admitted step bound",
+                    ));
+                }
+                let step = {
+                    let mut scratch = scratch_storage.scratch();
+                    ams_core::glm4_greedy_advance(
+                        plan,
+                        readers,
+                        &mut caches,
+                        &mut session,
+                        &mut scratch,
+                        false,
+                    )?
+                };
+                generation_steps += 1;
+                match step {
+                    ams_core::Glm4GenerationStep::Prefill { .. } => {}
+                    ams_core::Glm4GenerationStep::Token { token_id } => {
+                        output_token_ids.push(token_id);
+                    }
+                    ams_core::Glm4GenerationStep::Finished { token_id, reason } => {
+                        if let Some(token_id) = token_id {
+                            output_token_ids.push(token_id);
+                        }
+                        break match reason {
+                            ams_core::Glm4FinishReason::EndOfSequence => "end_of_sequence",
+                            ams_core::Glm4FinishReason::Length => "length",
+                        };
+                    }
+                }
+            };
+            if caches
+                .iter()
+                .any(|cache| cache.committed_tokens() != session.position())
+            {
+                return Err(RuntimeError::new(
+                    ErrorCode::InternalInvariant,
+                    "native generation ended with divergent cache prefixes",
+                ));
+            }
+            Ok(Glm4GreedyOutput {
+                schema_id: "ams.native.glm4-greedy-output.v1",
+                binding_hash,
+                prompt_tokens: session.prompt_consumed(),
+                output_token_ids,
+                finish_reason,
+                committed_cache_tokens: session.position(),
+                generation_steps,
+                cache_heap_bytes,
+                scratch_heap_bytes,
+                scratch_logical_bytes,
+            })
+        })
     }
 }
 
@@ -395,6 +552,7 @@ pub fn admit_glm4_binding_bytes(
     Ok(AdmittedGlm4Binding {
         plan,
         readers,
+        eos_token_ids: normalized.eos_token_ids,
         evidence,
     })
 }
@@ -417,6 +575,7 @@ struct NormalizedBinding {
     executable_tensor_count: usize,
     mtp_tensor_count: usize,
     cache_storage_bytes_total: usize,
+    eos_token_ids: Vec<usize>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -639,6 +798,7 @@ fn normalize_identity(
         executable_tensor_count,
         mtp_tensor_count,
         cache_storage_bytes_total: identity.cache_storage_bytes_total,
+        eos_token_ids: identity.eos_token_ids,
     })
 }
 

@@ -33,7 +33,7 @@ try {
         try {
             python -m pytest -q `
                 tests/invariant/test_mini_glm4_forward.py `
-                -k native_bridge_process
+                -k "native_bridge_process or native_generation_process"
         }
         finally {
             Remove-Item Env:AMS_NATIVE_BINARY -ErrorAction SilentlyContinue

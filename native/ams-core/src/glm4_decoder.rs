@@ -66,6 +66,12 @@ impl Glm4DecoderPlan {
         self.dense.cache_plan().capacity_tokens()
     }
 
+    /// Exact K/V cache geometry shared by every decoder layer.
+    #[must_use]
+    pub const fn cache_plan(&self) -> crate::KvCachePlan {
+        self.dense.cache_plan()
+    }
+
     /// Exact working set for the sole dense layer.
     #[must_use]
     pub const fn dense_scratch(&self) -> Glm4DenseLayerScratchRequirements {

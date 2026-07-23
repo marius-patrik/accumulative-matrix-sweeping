@@ -746,6 +746,84 @@ def test_mini_glm4_native_bridge_process_verifies_and_retries_exact_objects(
     assert json.loads(retried.stdout) == evidence
 
 
+def test_mini_glm4_native_generation_process_matches_low_bit_oracle(
+    tmp_path: Path,
+) -> None:
+    binary = os.environ.get("AMS_NATIVE_BINARY")
+    if binary is None:
+        pytest.skip("native generation binary is exercised by the post-build verification step")
+    package_root, architecture, expected_weights = build_mini_glm4_package(tmp_path)
+    package_weights = GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    plan = package_weights.native_glm4_binding_plan(
+        context_capacity_tokens=8,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(6,),
+    )
+    envelope_path = tmp_path / "native-binding.json"
+    envelope_path.write_bytes(serialize_glm4_native_binding_plan(plan))
+    request_path = tmp_path / "greedy-request.json"
+
+    def generate(request):
+        request_path.write_bytes(canonical_json_bytes(request))
+        return subprocess.run(
+            [binary, "generate", str(envelope_path), str(request_path), "64"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    valid_request = {
+        "schema_id": "ams.native.glm4-greedy-request.v1",
+        "prompt_token_ids": [1, 3],
+        "max_new_tokens": 2,
+    }
+    completed = generate(valid_request)
+    assert completed.returncode == 0, completed.stderr
+    output = json.loads(completed.stdout)
+
+    prefix = list(valid_request["prompt_token_ids"])
+    expected_tokens = []
+    for _ in range(valid_request["max_new_tokens"]):
+        reference = run_glm4_moe_lite_prefill_reference(
+            architecture,
+            expected_weights,
+            tuple(prefix),
+        )
+        final_logits = reference.logits[-1][: plan.tokenizer_vocabulary_size]
+        selected = max(range(len(final_logits)), key=final_logits.__getitem__)
+        if selected in plan.eos_token_ids:
+            break
+        expected_tokens.append(selected)
+        if len(expected_tokens) < valid_request["max_new_tokens"]:
+            prefix.append(selected)
+    assert output == {
+        "schema_id": "ams.native.glm4-greedy-output.v1",
+        "binding_hash": plan.binding_hash,
+        "prompt_tokens": 2,
+        "output_token_ids": expected_tokens,
+        "finish_reason": "length",
+        "committed_cache_tokens": 3,
+        "generation_steps": 3,
+        "cache_heap_bytes": plan.cache_storage_bytes_total,
+        "scratch_heap_bytes": 2107,
+        "scratch_logical_bytes": 2155,
+    }
+    assert expected_tokens == [7, 1]
+
+    malformed = generate({**valid_request, "unreviewed": True})
+    assert malformed.returncode != 0
+    assert json.loads(malformed.stderr)["code"] == ErrorCode.INVALID_PACKAGE.value
+
+    over_capacity = generate({**valid_request, "max_new_tokens": 8})
+    assert over_capacity.returncode != 0
+    assert json.loads(over_capacity.stderr)["code"] == ErrorCode.PREFLIGHT_NO_WORKING_SET.value
+
+    retried = generate(valid_request)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout) == output
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_code"),
     (

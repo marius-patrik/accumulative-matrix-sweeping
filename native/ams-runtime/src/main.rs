@@ -1,10 +1,15 @@
 //! Command-line boundary for native AMS package admission.
 
 use std::env;
+use std::ffi::OsString;
+use std::fs;
+use std::path::Path;
 use std::process::ExitCode;
 
 use ams_runtime::{RuntimeError, admit_glm4_binding_file};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Serialize)]
 struct ErrorOutput<'a> {
@@ -13,51 +18,128 @@ struct ErrorOutput<'a> {
     message: &'a str,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GreedyRequest {
+    schema_id: String,
+    prompt_token_ids: Vec<usize>,
+    max_new_tokens: usize,
+}
+
+fn static_error(code: ams_core::ErrorCode, context: &'static str) -> RuntimeError {
+    RuntimeError::from(ams_core::AmsError::new(code, context))
+}
+
+fn parse_buffer(value: Option<OsString>) -> Result<usize, RuntimeError> {
+    value.map_or(Ok(1024 * 1024), |value| {
+        value.to_string_lossy().parse::<usize>().map_err(|_| {
+            static_error(
+                ams_core::ErrorCode::PlanInvalid,
+                "verification buffer is not an integer",
+            )
+        })
+    })
+}
+
+fn serialize_output(value: &impl Serialize) -> Result<String, RuntimeError> {
+    serde_json::to_string(value).map_err(|_| {
+        static_error(
+            ams_core::ErrorCode::InternalInvariant,
+            "native output serialization failed",
+        )
+    })
+}
+
+fn read_greedy_request(path: impl AsRef<Path>) -> Result<GreedyRequest, RuntimeError> {
+    let path = path.as_ref();
+    let metadata = path.symlink_metadata().map_err(|_| {
+        static_error(
+            ams_core::ErrorCode::IoFailure,
+            "greedy request metadata read failed",
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(static_error(
+            ams_core::ErrorCode::InvalidPackage,
+            "greedy request is not a nonsymlink regular file",
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_REQUEST_BYTES {
+        return Err(static_error(
+            ams_core::ErrorCode::PlanInvalid,
+            "greedy request size is outside the admitted bound",
+        ));
+    }
+    let payload = fs::read(path)
+        .map_err(|_| static_error(ams_core::ErrorCode::IoFailure, "greedy request read failed"))?;
+    let request: GreedyRequest = serde_json::from_slice(&payload).map_err(|_| {
+        static_error(
+            ams_core::ErrorCode::InvalidPackage,
+            "greedy request JSON is malformed or contains unreviewed fields",
+        )
+    })?;
+    if request.schema_id != "ams.native.glm4-greedy-request.v1" {
+        return Err(static_error(
+            ams_core::ErrorCode::CapabilityMismatch,
+            "greedy request schema is unsupported",
+        ));
+    }
+    Ok(request)
+}
+
 fn run() -> Result<(), RuntimeError> {
     let mut arguments = env::args_os().skip(1);
     let command = arguments.next().ok_or_else(|| {
-        RuntimeError::from(ams_core::AmsError::new(
+        static_error(
             ams_core::ErrorCode::PlanInvalid,
             "missing native runtime command",
-        ))
+        )
     })?;
-    if command != "inspect" {
-        return Err(RuntimeError::from(ams_core::AmsError::new(
-            ams_core::ErrorCode::CapabilityMismatch,
-            "native runtime command is unsupported",
-        )));
-    }
     let path = arguments.next().ok_or_else(|| {
-        RuntimeError::from(ams_core::AmsError::new(
+        static_error(
             ams_core::ErrorCode::PlanInvalid,
             "missing binding envelope path",
-        ))
+        )
     })?;
-    let buffer_bytes = match arguments.next() {
-        Some(value) => value.to_string_lossy().parse::<usize>().map_err(|_| {
-            RuntimeError::from(ams_core::AmsError::new(
-                ams_core::ErrorCode::PlanInvalid,
-                "verification buffer is not an integer",
-            ))
-        })?,
-        None => 1024 * 1024,
-    };
-    if arguments.next().is_some() {
-        return Err(RuntimeError::from(ams_core::AmsError::new(
-            ams_core::ErrorCode::PlanInvalid,
-            "native runtime received unexpected arguments",
-        )));
+    match command.to_string_lossy().as_ref() {
+        "inspect" => {
+            let buffer_bytes = parse_buffer(arguments.next())?;
+            if arguments.next().is_some() {
+                return Err(static_error(
+                    ams_core::ErrorCode::PlanInvalid,
+                    "native inspect received unexpected arguments",
+                ));
+            }
+            let admitted = admit_glm4_binding_file(path, buffer_bytes)?;
+            println!("{}", serialize_output(admitted.evidence())?);
+        }
+        "generate" => {
+            let request_path = arguments.next().ok_or_else(|| {
+                static_error(
+                    ams_core::ErrorCode::PlanInvalid,
+                    "missing greedy request path",
+                )
+            })?;
+            let buffer_bytes = parse_buffer(arguments.next())?;
+            if arguments.next().is_some() {
+                return Err(static_error(
+                    ams_core::ErrorCode::PlanInvalid,
+                    "native generate received unexpected arguments",
+                ));
+            }
+            let request = read_greedy_request(request_path)?;
+            let admitted = admit_glm4_binding_file(path, buffer_bytes)?;
+            let output =
+                admitted.generate_greedy(&request.prompt_token_ids, request.max_new_tokens)?;
+            println!("{}", serialize_output(&output)?);
+        }
+        _ => {
+            return Err(static_error(
+                ams_core::ErrorCode::CapabilityMismatch,
+                "native runtime command is unsupported",
+            ));
+        }
     }
-    let admitted = admit_glm4_binding_file(path, buffer_bytes)?;
-    println!(
-        "{}",
-        serde_json::to_string(admitted.evidence()).map_err(|_| {
-            RuntimeError::from(ams_core::AmsError::new(
-                ams_core::ErrorCode::InternalInvariant,
-                "admission evidence serialization failed",
-            ))
-        })?
-    );
     Ok(())
 }
 

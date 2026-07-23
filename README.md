@@ -102,8 +102,8 @@ A bounded native greedy session now owns the immutable prompt, EOS set, output l
 pending decode input, and terminal reason. It preflights the complete worst-case KV capacity, skips
 the LM head for every non-final prompt token, validates every layer prefix against its position, emits
 ordered prefill/token/terminal steps, and leaves both caches and session retryable after cancellation
-or model failure. Cancellation is currently observed between tokens; package binding, non-greedy
-sampling, and sub-token cooperative polling remain required.
+or model failure. Cancellation is currently observed between tokens; persistent service integration,
+non-greedy sampling, and sub-token cooperative polling remain required.
 An immutable package-to-native GLM-4 binding descriptor now closes the control-plane half of package
 binding. It orders the exact tensor inventory, maps every range to a deduplicated immutable object,
 carries dtype/codec/layer/expert/MTP metadata, admits only native-compatible identity vectors, and
@@ -115,8 +115,13 @@ plan, and borrow-scoped reader topology without reading weights. The new `ams-ru
 boundary consumes an exact hashed Python identity plus local path map, revalidates the complete
 base+MTP inventory, shapes, codecs, ranges, cache limits, and model plan, then full-hashes every object
 through the same retained nonsymlink file handles. A cross-language miniature corruption/retry test
-proves fail-closed admission. Owned caches/scratch and generation through this admitted binding remain
-open.
+proves fail-closed admission. The `ams-runtime generate` boundary now allocates exact typed caches and
+scratch fallibly, keeps Rust session/cache state authoritative, and executes bounded greedy token-ID
+requests through that admitted binding. The mixed identity/ternary/INT4 miniature independently
+matches the Python low-bit oracle at output `[7, 1]`, reports 192 cache heap bytes, 2,107 scratch heap
+bytes, and 2,155 logical scratch bytes, rejects malformed and over-capacity requests before execution,
+and reproduces the exact result on retry. This is deliberately still a fresh-process, fresh-cache
+CLI—not a tokenizer-integrated, persistent, streaming, cancellable OpenAI-compatible service.
 The first deterministic GLM-4.7 precision candidate keeps embeddings, routers, norms, and correction
 biases exact, assigns routed-expert matrices to grouped ternary, and assigns other rank-2 compute
 matrices to symmetric INT4. A complete header-only audit estimates 9,100,218,112 encoded tensor bytes
