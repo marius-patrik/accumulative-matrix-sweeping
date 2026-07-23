@@ -317,7 +317,9 @@ The reconstruction branch currently contains:
   0.00928256445336389 normalized RMS error against pinned Transformers BF16; all eight
   full-vocabulary top tokens agreed. `docs/evidence/glm47_complete_bf16_differential.json` is
   `passed` with no blockers. A validated checkpoint can resume interrupted reference work, but final
-  evidence is authoritative only when its output also matches a fresh run.
+  evidence is authoritative only when its output also matches a fresh run. Checkpoint schema v2
+  authenticates the source root, canonical hashes and versions for the reference implementation,
+  and the exact BF16 hidden payload before resuming; stale or corrupt newest state fails closed.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and

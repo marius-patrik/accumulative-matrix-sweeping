@@ -10,11 +10,12 @@ import json
 import math
 import os
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from ams.canonical import canonical_json_bytes
-from ams.descriptors import DType, StorageObject
+from ams.descriptors import DType, StorageObject, validate_digest
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
     Glm4LayerDifferentialStatus,
@@ -50,7 +51,9 @@ _SHARD_COUNT = 48
 _BASE_LAYER_COUNT = 47
 _MTP_LAYER_INDEX = 47
 _LINEAR_ARENA_BYTES = 1024 * 1024
-_CHECKPOINT_SCHEMA = "ams.glm47-streaming-reference-checkpoint.v1"
+_CHECKPOINT_SCHEMA = "ams.glm47-streaming-reference-checkpoint.v2"
+_REFERENCE_RUNTIME_SCHEMA = "ams.glm47-streaming-reference-runtime.v1"
+_MAX_REFERENCE_SOURCE_BYTES = 16 * 1024 * 1024
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -380,18 +383,166 @@ def _build_full_native_binding(
 
 def _checkpoint_metadata(
     architecture: Glm4MoeLiteArchitecture,
+    source_root: str,
     input_hash: str,
+    reference_runtime_identity: dict[str, str],
     completed_layer: int,
     sample_count: int,
+    hidden_payload_hash: str,
 ) -> dict[str, str]:
+    validate_digest(source_root, name="checkpoint.source_root")
+    validate_digest(input_hash, name="checkpoint.input_hash")
+    validate_digest(hidden_payload_hash, name="checkpoint.hidden_payload_hash")
+    runtime_identity_json, runtime_identity_hash = _canonical_reference_runtime_identity(
+        reference_runtime_identity
+    )
     return {
         "schema_id": _CHECKPOINT_SCHEMA,
         "architecture_hash": architecture.content_hash,
+        "source_root": source_root,
         "input_hash": input_hash,
+        "reference_runtime_identity": runtime_identity_json,
+        "reference_runtime_hash": runtime_identity_hash,
         "completed_layer": str(completed_layer),
         "sample_count": str(sample_count),
         "hidden_size": str(architecture.hidden_size),
+        "hidden_payload_hash": hidden_payload_hash,
     }
+
+
+def _hash_reference_source(path: Path, *, label: str) -> str:
+    try:
+        resolved = path.resolve(strict=True)
+        if not resolved.is_file():
+            raise AmsError(
+                ErrorCode.INTEGRITY_FAILURE,
+                f"{label} is not a regular source file",
+            )
+        size = resolved.stat().st_size
+        if size <= 0 or size > _MAX_REFERENCE_SOURCE_BYTES:
+            raise AmsError(
+                ErrorCode.INTEGRITY_FAILURE,
+                f"{label} size is outside the reference identity bound",
+            )
+        payload = resolved.read_bytes()
+    except AmsError:
+        raise
+    except OSError as exc:
+        raise AmsError(
+            ErrorCode.IO_FAILURE,
+            f"{label} could not be hashed",
+        ) from exc
+    if len(payload) != size:
+        raise AmsError(ErrorCode.INTEGRITY_FAILURE, f"{label} changed while being hashed")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _build_reference_runtime_identity(
+    torch,
+    transformers,
+    safetensors,
+    Glm4MoeLiteDecoderLayer,
+) -> dict[str, str]:
+    modeling_source = inspect.getsourcefile(Glm4MoeLiteDecoderLayer)
+    layer_probe_source = getattr(layer_probe, "__file__", None)
+    if modeling_source is None or layer_probe_source is None:
+        raise AmsError(
+            ErrorCode.CAPABILITY_MISMATCH,
+            "streaming reference runtime source identity is unavailable",
+        )
+    modeling_path = Path(modeling_source)
+    layer_probe_path = Path(layer_probe_source)
+    verifier_path = Path(__file__)
+    return {
+        "schema_id": _REFERENCE_RUNTIME_SCHEMA,
+        "runtime_id": "transformers.glm4_moe_lite.complete_streaming_bf16",
+        "modeling_source_hash": _hash_reference_source(
+            modeling_path,
+            label="Transformers GLM-4 modeling source",
+        ),
+        "layer_verifier_source_hash": _hash_reference_source(
+            layer_probe_path,
+            label="GLM-4 layer verifier source",
+        ),
+        "model_verifier_source_hash": _hash_reference_source(
+            verifier_path,
+            label="GLM-4 model verifier source",
+        ),
+        "runtime_code_hash": layer_probe._module_hash(
+            (modeling_path, layer_probe_path, verifier_path)
+        ),
+        "torch_version": str(torch.__version__),
+        "transformers_version": str(transformers.__version__),
+        "safetensors_version": str(safetensors.__version__),
+    }
+
+
+def _canonical_reference_runtime_identity(identity: dict[str, str]) -> tuple[str, str]:
+    required = {
+        "schema_id",
+        "runtime_id",
+        "modeling_source_hash",
+        "layer_verifier_source_hash",
+        "model_verifier_source_hash",
+        "runtime_code_hash",
+        "torch_version",
+        "transformers_version",
+        "safetensors_version",
+    }
+    if not isinstance(identity, dict) or set(identity) != required:
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "streaming reference runtime identity fields are invalid",
+        )
+    if (
+        identity["schema_id"] != _REFERENCE_RUNTIME_SCHEMA
+        or identity["runtime_id"] != "transformers.glm4_moe_lite.complete_streaming_bf16"
+    ):
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "streaming reference runtime identity is unsupported",
+        )
+    for name in (
+        "modeling_source_hash",
+        "layer_verifier_source_hash",
+        "model_verifier_source_hash",
+        "runtime_code_hash",
+    ):
+        validate_digest(identity[name], name=f"checkpoint.reference_runtime.{name}")
+    for name in ("torch_version", "transformers_version", "safetensors_version"):
+        value = identity[name]
+        if not isinstance(value, str) or not value or len(value.encode("utf-8")) > 256:
+            raise AmsError(
+                ErrorCode.INTEGRITY_FAILURE,
+                "streaming reference runtime version is invalid",
+            )
+    payload = canonical_json_bytes(identity)
+    return payload.decode("utf-8"), "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _hidden_payload_hash(hidden, torch) -> str:
+    try:
+        normalized = hidden.detach().cpu().contiguous()
+        if normalized.dtype != torch.bfloat16:
+            raise AmsError(
+                ErrorCode.INTEGRITY_FAILURE,
+                "streaming reference checkpoint payload is not BF16",
+            )
+        element_count = math.prod(tuple(normalized.shape))
+        payload = normalized.view(torch.uint8).numpy().tobytes(order="C")
+    except AmsError:
+        raise
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "streaming reference checkpoint payload could not be hashed",
+        ) from exc
+    if len(payload) != element_count * 2:
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "streaming reference checkpoint payload byte count is invalid",
+        )
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def _prepare_checkpoint_root(path: Path) -> Path:
@@ -418,57 +569,103 @@ def _prepare_checkpoint_root(path: Path) -> Path:
         ) from exc
 
 
-def _load_reference_checkpoint(
-    root: Path,
+def _admit_reference_checkpoint(
+    path: Path,
     architecture: Glm4MoeLiteArchitecture,
+    source_root: str,
     input_hash: str,
+    reference_runtime_identity: dict[str, str],
+    completed_layer: int,
     sample_count: int,
     torch,
     safe_open,
 ):
     from safetensors.torch import load_file
 
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise AmsError(
+                ErrorCode.INTEGRITY_FAILURE,
+                "streaming reference checkpoint is not a nonsymlink regular file",
+            )
+        with safe_open(path, framework="pt", device="cpu") as handle:
+            metadata = handle.metadata()
+            keys = tuple(handle.keys())
+        if not isinstance(metadata, dict):
+            raise AmsError(
+                ErrorCode.INTEGRITY_FAILURE,
+                "streaming reference checkpoint metadata is invalid",
+            )
+        hidden_payload_hash = metadata.get("hidden_payload_hash")
+        if not isinstance(hidden_payload_hash, str):
+            raise AmsError(
+                ErrorCode.INTEGRITY_FAILURE,
+                "streaming reference checkpoint payload identity is missing",
+            )
+        expected = _checkpoint_metadata(
+            architecture,
+            source_root,
+            input_hash,
+            reference_runtime_identity,
+            completed_layer,
+            sample_count,
+            hidden_payload_hash,
+        )
+        if metadata != expected or keys != ("hidden",):
+            raise AmsError(
+                ErrorCode.INTEGRITY_FAILURE,
+                "streaming reference checkpoint identity is invalid",
+            )
+        hidden = load_file(path, device="cpu")["hidden"]
+    except AmsError:
+        raise
+    except (OSError, RuntimeError, KeyError) as exc:
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "streaming reference checkpoint could not be admitted",
+        ) from exc
+    if (
+        tuple(hidden.shape) != (1, sample_count, architecture.hidden_size)
+        or hidden.dtype != torch.bfloat16
+        or not bool(torch.isfinite(hidden).all())
+    ):
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "streaming reference checkpoint tensor is invalid",
+        )
+    if _hidden_payload_hash(hidden, torch) != hidden_payload_hash:
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "streaming reference checkpoint payload hash mismatch",
+        )
+    return hidden
+
+
+def _load_reference_checkpoint(
+    root: Path,
+    architecture: Glm4MoeLiteArchitecture,
+    source_root: str,
+    input_hash: str,
+    reference_runtime_identity: dict[str, str],
+    sample_count: int,
+    torch,
+    safe_open,
+):
     for completed_layer in range(architecture.num_hidden_layers - 1, -1, -1):
         path = root / f"layer-{completed_layer:02d}.safetensors"
         if not path.exists():
             continue
-        try:
-            if path.is_symlink() or not path.is_file():
-                raise AmsError(
-                    ErrorCode.INTEGRITY_FAILURE,
-                    "streaming reference checkpoint is not a nonsymlink regular file",
-                )
-            with safe_open(path, framework="pt", device="cpu") as handle:
-                metadata = handle.metadata()
-                keys = tuple(handle.keys())
-            expected = _checkpoint_metadata(
-                architecture,
-                input_hash,
-                completed_layer,
-                sample_count,
-            )
-            if metadata != expected or keys != ("hidden",):
-                raise AmsError(
-                    ErrorCode.INTEGRITY_FAILURE,
-                    "streaming reference checkpoint identity is invalid",
-                )
-            hidden = load_file(path, device="cpu")["hidden"]
-        except AmsError:
-            raise
-        except (OSError, RuntimeError, KeyError) as exc:
-            raise AmsError(
-                ErrorCode.INTEGRITY_FAILURE,
-                "streaming reference checkpoint could not be admitted",
-            ) from exc
-        if (
-            tuple(hidden.shape) != (1, sample_count, architecture.hidden_size)
-            or hidden.dtype != torch.bfloat16
-            or not bool(torch.isfinite(hidden).all())
-        ):
-            raise AmsError(
-                ErrorCode.INTEGRITY_FAILURE,
-                "streaming reference checkpoint tensor is invalid",
-            )
+        hidden = _admit_reference_checkpoint(
+            path,
+            architecture,
+            source_root,
+            input_hash,
+            reference_runtime_identity,
+            completed_layer,
+            sample_count,
+            torch,
+            safe_open,
+        )
         print(
             f"[reference resume] completed layer {completed_layer}",
             file=sys.stderr,
@@ -481,9 +678,13 @@ def _load_reference_checkpoint(
 def _save_reference_checkpoint(
     root: Path,
     architecture: Glm4MoeLiteArchitecture,
+    source_root: str,
     input_hash: str,
+    reference_runtime_identity: dict[str, str],
     completed_layer: int,
     hidden,
+    torch,
+    safe_open,
 ) -> None:
     from safetensors.torch import save_file
 
@@ -495,15 +696,33 @@ def _save_reference_checkpoint(
                 ErrorCode.INTEGRITY_FAILURE,
                 "streaming reference checkpoint target is a symbolic link",
             )
+        normalized = hidden.detach().cpu().contiguous()
+        hidden_payload_hash = _hidden_payload_hash(normalized, torch)
         save_file(
-            {"hidden": hidden.detach().cpu().contiguous()},
+            {"hidden": normalized},
             temporary,
             metadata=_checkpoint_metadata(
                 architecture,
+                source_root,
                 input_hash,
+                reference_runtime_identity,
                 completed_layer,
                 hidden.shape[1],
+                hidden_payload_hash,
             ),
+        )
+        with temporary.open("rb+") as handle:
+            os.fsync(handle.fileno())
+        _admit_reference_checkpoint(
+            temporary,
+            architecture,
+            source_root,
+            input_hash,
+            reference_runtime_identity,
+            completed_layer,
+            hidden.shape[1],
+            torch,
+            safe_open,
         )
         temporary.replace(target)
     except AmsError:
@@ -513,6 +732,9 @@ def _save_reference_checkpoint(
             ErrorCode.IO_FAILURE,
             "streaming reference checkpoint could not be published",
         ) from exc
+    finally:
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)
 
 
 def _layer_shard_path(index, shard_root: Path, layer_index: int) -> Path:
@@ -532,7 +754,9 @@ def _run_streaming_reference(
     index,
     architecture: Glm4MoeLiteArchitecture,
     token_ids: tuple[int, ...],
+    source_root: str,
     input_hash: str,
+    reference_runtime_identity: dict[str, str],
     checkpoint_root: Path,
     torch,
     transformers,
@@ -552,7 +776,9 @@ def _run_streaming_reference(
         hidden, start_layer = _load_reference_checkpoint(
             checkpoint_root,
             architecture,
+            source_root,
             input_hash,
+            reference_runtime_identity,
             len(token_ids),
             torch,
             safe_open,
@@ -603,9 +829,13 @@ def _run_streaming_reference(
             _save_reference_checkpoint(
                 checkpoint_root,
                 architecture,
+                source_root,
                 input_hash,
+                reference_runtime_identity,
                 layer_index,
                 hidden,
+                torch,
+                safe_open,
             )
             del layer
             gc.collect()
@@ -623,17 +853,13 @@ def _run_streaming_reference(
         with torch.no_grad():
             logits = torch.nn.functional.linear(norm(hidden), lm_head)
     logit_rows = tuple(tuple(float(value) for value in row) for row in logits[0].float().tolist())
-    modeling_path = Path(inspect.getsourcefile(Glm4MoeLiteDecoderLayer) or "")
-    runtime_code_hash = layer_probe._module_hash(
-        (modeling_path, Path(layer_probe.__file__), Path(__file__))
-    )
     return Glm4LayerObservation(
         runtime_id="transformers.glm4_moe_lite.complete_streaming_bf16",
         runtime_version=(
             f"transformers/{transformers.__version__};"
             f"torch/{torch.__version__};safetensors/{safetensors.__version__}"
         ),
-        runtime_code_hash=runtime_code_hash,
+        runtime_code_hash=reference_runtime_identity["runtime_code_hash"],
         input_hash=input_hash,
         sample_ids=tuple(f"position-{index}" for index in range(sample_count)),
         hidden_states=decoder_hidden,
@@ -693,6 +919,12 @@ def main() -> int:
     torch.set_num_threads(arguments.torch_threads)
     torch.set_num_interop_threads(1)
     torch.use_deterministic_algorithms(True)
+    reference_runtime_identity = _build_reference_runtime_identity(
+        torch,
+        transformers,
+        safetensors,
+        Glm4MoeLiteDecoderLayer,
+    )
     checkpoint_root = _prepare_checkpoint_root(
         arguments.checkpoint_dir
         or (
@@ -708,7 +940,9 @@ def main() -> int:
         index,
         architecture,
         token_ids,
+        source_root,
         input_hash,
+        reference_runtime_identity,
         checkpoint_root,
         torch,
         transformers,

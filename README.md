@@ -201,7 +201,9 @@ checkpoints, and remained below a 2.85 GB observed process working set on the qu
 non-qualifying for the later low-bit precision policy by design. Reproduce the fresh authority run
 with `python ci/verify_glm4_official_model_native.py <asset-root> <48-shard-root>
 <ams-runtime-binary>`; `--resume-reference` is an interruption-recovery optimization whose output
-must match a fresh run.
+must match a fresh run. Resume checkpoint schema v2 binds every checkpoint to the authenticated
+source root, canonical reference source/toolchain identity, and SHA-256 of the exact BF16 hidden
+payload; a corrupt newest checkpoint fails closed instead of falling back to an older layer.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds
