@@ -120,8 +120,14 @@ scratch fallibly, keeps Rust session/cache state authoritative, and executes bou
 requests through that admitted binding. The mixed identity/ternary/INT4 miniature independently
 matches the Python low-bit oracle at output `[7, 1]`, reports 192 cache heap bytes, 2,107 scratch heap
 bytes, and 2,155 logical scratch bytes, rejects malformed and over-capacity requests before execution,
-and reproduces the exact result on retry. This is deliberately still a fresh-process, fresh-cache
-CLI—not a tokenizer-integrated, persistent, streaming, cancellable OpenAI-compatible service.
+and reproduces the exact result on retry. The `ams-runtime worker` process now performs that admission
+once, retains the verified handles and model plan, and accepts strict JSON-line commands capped at
+1 MiB with a one-request/one-command-slot bound. It flushes indexed token frames, accepts matching
+request-ID cancellation between model transitions, publishes exactly one terminal frame before
+releasing the request slot, and cancels on EOF or graceful shutdown. The process fixture proves
+concurrent-request rejection, cancellation during a full-capacity prefill, and deterministic
+same-process retry. Each request still receives a fresh cache, and the worker remains a token-ID
+engine rather than a tokenizer-integrated OpenAI-compatible service.
 The first deterministic GLM-4.7 precision candidate keeps embeddings, routers, norms, and correction
 biases exact, assigns routed-expert matrices to grouped ternary, and assigns other rank-2 compute
 matrices to symmetric INT4. A complete header-only audit estimates 9,100,218,112 encoded tensor bytes

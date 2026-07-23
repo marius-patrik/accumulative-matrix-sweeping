@@ -27,13 +27,13 @@ try {
     Invoke-VerificationStep "Rust format" { cargo fmt --all -- --check }
     Invoke-VerificationStep "Rust check" { cargo check --workspace --all-targets }
     Invoke-VerificationStep "Rust tests" { cargo test --workspace }
-    Invoke-VerificationStep "Native GLM-4 package bridge" {
+    Invoke-VerificationStep "Native GLM-4 process boundary" {
         cargo build -p ams-runtime
         $env:AMS_NATIVE_BINARY = Join-Path $RepositoryRoot "target\\debug\\ams-runtime.exe"
         try {
             python -m pytest -q `
                 tests/invariant/test_mini_glm4_forward.py `
-                -k "native_bridge_process or native_generation_process"
+                -k "native_bridge_process or native_generation_process or native_worker_process"
         }
         finally {
             Remove-Item Env:AMS_NATIVE_BINARY -ErrorAction SilentlyContinue

@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
-use ams_runtime::{RuntimeError, admit_glm4_binding_file};
+use ams_runtime::{RuntimeError, admit_glm4_binding_file, run_glm4_worker_stdio};
 use serde::{Deserialize, Serialize};
 
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
@@ -132,6 +132,17 @@ fn run() -> Result<(), RuntimeError> {
             let output =
                 admitted.generate_greedy(&request.prompt_token_ids, request.max_new_tokens)?;
             println!("{}", serialize_output(&output)?);
+        }
+        "worker" => {
+            let buffer_bytes = parse_buffer(arguments.next())?;
+            if arguments.next().is_some() {
+                return Err(static_error(
+                    ams_core::ErrorCode::PlanInvalid,
+                    "native worker received unexpected arguments",
+                ));
+            }
+            let admitted = admit_glm4_binding_file(path, buffer_bytes)?;
+            run_glm4_worker_stdio(&admitted)?;
         }
         _ => {
             return Err(static_error(

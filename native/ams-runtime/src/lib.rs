@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(crate) mod owned;
+mod worker_protocol;
 
 use owned::{CacheStorage, ModelScratchStorage};
+pub use worker_protocol::run_glm4_worker_stdio;
 
 const MAX_ENVELOPE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_VERIFICATION_BUFFER_BYTES: usize = 64 * 1024 * 1024;
@@ -288,6 +290,27 @@ impl AdmittedGlm4Binding {
         prompt_token_ids: &[usize],
         max_new_tokens: usize,
     ) -> Result<Glm4GreedyOutput, RuntimeError> {
+        self.generate_greedy_with_control(prompt_token_ids, max_new_tokens, || false, |_, _| Ok(()))
+    }
+
+    /// Execute one bounded greedy request with cooperative cancellation and ordered token delivery.
+    ///
+    /// The cancellation callback is polled before every model transition. The token callback runs
+    /// exactly once for every non-EOS output token, after the token becomes authoritative locally and
+    /// before the next token can be consumed into cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed resource, cancellation, publication, storage, codec, numeric, or execution
+    /// failure. No completion value is returned after cancellation or a token-publication failure.
+    #[allow(clippy::too_many_lines)] // One request owns admission, state, resources, and commit order.
+    pub fn generate_greedy_with_control(
+        &self,
+        prompt_token_ids: &[usize],
+        max_new_tokens: usize,
+        mut cancellation_requested: impl FnMut() -> bool,
+        mut publish_token: impl FnMut(usize, usize) -> Result<(), RuntimeError>,
+    ) -> Result<Glm4GreedyOutput, RuntimeError> {
         let binding_hash = self.evidence.binding_hash.clone();
         let eos_token_ids = &self.eos_token_ids;
         let evidence = &self.evidence;
@@ -298,6 +321,12 @@ impl AdmittedGlm4Binding {
                 eos_token_ids,
                 max_new_tokens,
             )?;
+            if cancellation_requested() {
+                return Err(RuntimeError::new(
+                    ErrorCode::Cancelled,
+                    "native generation was cancelled before working-set allocation",
+                ));
+            }
             let cache_plan = plan.decoder().cache_plan();
             let mut cache_storage =
                 CacheStorage::allocate_all(cache_plan, plan.decoder().layer_count())?;
@@ -349,18 +378,22 @@ impl AdmittedGlm4Binding {
                         &mut caches,
                         &mut session,
                         &mut scratch,
-                        false,
+                        cancellation_requested(),
                     )?
                 };
                 generation_steps += 1;
                 match step {
                     ams_core::Glm4GenerationStep::Prefill { .. } => {}
                     ams_core::Glm4GenerationStep::Token { token_id } => {
+                        let token_index = output_token_ids.len();
                         output_token_ids.push(token_id);
+                        publish_token(token_index, token_id)?;
                     }
                     ams_core::Glm4GenerationStep::Finished { token_id, reason } => {
                         if let Some(token_id) = token_id {
+                            let token_index = output_token_ids.len();
                             output_token_ids.push(token_id);
+                            publish_token(token_index, token_id)?;
                         }
                         break match reason {
                             ams_core::Glm4FinishReason::EndOfSequence => "end_of_sequence",

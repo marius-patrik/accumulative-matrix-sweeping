@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
+from queue import Queue
+from threading import Thread
 
 import numpy as np
 import pytest
@@ -822,6 +824,149 @@ def test_mini_glm4_native_generation_process_matches_low_bit_oracle(
     retried = generate(valid_request)
     assert retried.returncode == 0, retried.stderr
     assert json.loads(retried.stdout) == output
+
+
+def test_mini_glm4_native_worker_process_streams_cancels_and_retries(
+    tmp_path: Path,
+) -> None:
+    binary = os.environ.get("AMS_NATIVE_BINARY")
+    if binary is None:
+        pytest.skip("native worker binary is exercised by the post-build verification step")
+    package_root, _, _ = build_mini_glm4_package(tmp_path)
+    package_weights = GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    plan = package_weights.native_glm4_binding_plan(
+        context_capacity_tokens=16,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(6,),
+    )
+    envelope_path = tmp_path / "native-worker-binding.json"
+    envelope_path.write_bytes(serialize_glm4_native_binding_plan(plan))
+    process = subprocess.Popen(
+        [binary, "worker", str(envelope_path), "64"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    frames: Queue[dict[str, object]] = Queue()
+
+    def read_frames() -> None:
+        for line in process.stdout:
+            frames.put(json.loads(line))
+
+    reader = Thread(target=read_frames, daemon=True)
+    reader.start()
+
+    def send(*messages: dict[str, object]) -> None:
+        payload = b"".join(canonical_json_bytes(message) + b"\n" for message in messages)
+        process.stdin.write(payload)
+        process.stdin.flush()
+
+    def receive() -> dict[str, object]:
+        return frames.get(timeout=30)
+
+    def complete(request_id: int) -> tuple[list[dict[str, object]], dict[str, object]]:
+        tokens = []
+        while True:
+            frame = receive()
+            assert frame["request_id"] == request_id
+            if frame["schema_id"] == "ams.native.worker.token.v1":
+                tokens.append(frame)
+                continue
+            assert frame["schema_id"] == "ams.native.worker.completed.v1"
+            return tokens, frame
+
+    try:
+        ready = receive()
+        assert ready["schema_id"] == "ams.native.worker.ready.v1"
+        assert ready["evidence"]["binding_hash"] == plan.binding_hash
+        assert process.poll() is None
+
+        send(
+            {
+                "schema_id": "ams.native.worker.shutdown.v1",
+                "unreviewed": True,
+            }
+        )
+        malformed = receive()
+        assert malformed == {
+            "schema_id": "ams.native.worker.error.v1",
+            "request_id": None,
+            "code": ErrorCode.INVALID_PACKAGE.value,
+            "message": "native worker input is malformed or contains unreviewed fields",
+        }
+
+        valid = {
+            "schema_id": "ams.native.worker.generate.v1",
+            "request_id": 1,
+            "prompt_token_ids": [1, 3],
+            "max_new_tokens": 2,
+        }
+        send(valid)
+        tokens, completed = complete(1)
+        assert [(frame["index"], frame["token_id"]) for frame in tokens] == [(0, 7), (1, 1)]
+        output = completed["output"]
+        assert output == {
+            "schema_id": "ams.native.glm4-greedy-output.v1",
+            "binding_hash": plan.binding_hash,
+            "prompt_tokens": 2,
+            "output_token_ids": [7, 1],
+            "finish_reason": "length",
+            "committed_cache_tokens": 3,
+            "generation_steps": 3,
+            "cache_heap_bytes": plan.cache_storage_bytes_total,
+            "scratch_heap_bytes": 2107,
+            "scratch_logical_bytes": 2155,
+        }
+
+        send(
+            {
+                "schema_id": "ams.native.worker.generate.v1",
+                "request_id": 2,
+                "prompt_token_ids": [1] * 15,
+                "max_new_tokens": 2,
+            },
+            {
+                "schema_id": "ams.native.worker.generate.v1",
+                "request_id": 3,
+                "prompt_token_ids": [1, 3],
+                "max_new_tokens": 2,
+            },
+            {
+                "schema_id": "ams.native.worker.cancel.v1",
+                "request_id": 2,
+            },
+        )
+        terminal: dict[int, dict[str, object]] = {}
+        for _ in range(16):
+            frame = receive()
+            if frame["schema_id"] == "ams.native.worker.token.v1":
+                assert frame["request_id"] == 2
+                continue
+            terminal[int(frame["request_id"])] = frame
+            if terminal.keys() >= {2, 3}:
+                break
+        assert terminal[3]["code"] == ErrorCode.PREFLIGHT_NO_WORKING_SET.value
+        assert terminal[2]["code"] == ErrorCode.CANCELLED.value
+
+        send({**valid, "request_id": 4})
+        retried_tokens, retried = complete(4)
+        assert [frame["token_id"] for frame in retried_tokens] == [7, 1]
+        assert retried["output"] == output
+
+        send({"schema_id": "ams.native.worker.shutdown.v1"})
+        process.stdin.close()
+        assert process.wait(timeout=30) == 0
+        reader.join(timeout=5)
+        assert not reader.is_alive()
+        assert process.stderr.read() == b""
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 @pytest.mark.parametrize(

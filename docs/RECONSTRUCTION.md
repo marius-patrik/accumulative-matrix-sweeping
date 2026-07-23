@@ -334,9 +334,15 @@ The reconstruction branch currently contains:
   2,155 logical scratch bytes, three state-machine steps, and three committed cache positions. The
   terminal length token is emitted but not consumed into cache. Unknown request fields and
   over-capacity requests fail closed, and a valid retry is byte-for-byte deterministic. The boundary
-  still starts a new process and allocates fresh state per request; tokenizer integration, a
-  persistent broker, OpenAI protocol translation, streaming, exposed cancellation, sampling, and
-  cache reuse remain open.
+  now also has a persistent `ams-runtime worker` mode that admits and hashes the binding once, retains
+  the exact verified handles and native model plan, and serves strict JSON-line frames capped at
+  1 MiB. A one-slot command channel and one active request prevent unbounded queueing; numeric request
+  IDs own cancellation, indexed token frames are flushed in source order, and exactly one terminal
+  completion/error frame is published while the authoritative request slot is still held. EOF and
+  explicit shutdown cancel active work. The process proof streams `[7, 1]`, rejects a concurrent
+  request, cancels a full-capacity 15-token prefill, then produces the identical valid result in the
+  same PID. Cache/scratch storage is still fresh per request; tokenizer integration, OpenAI protocol
+  translation, sampling, and cache reuse remain open.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal
