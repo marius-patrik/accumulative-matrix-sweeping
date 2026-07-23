@@ -154,6 +154,10 @@ GLM-5.2 conversion remains blocked on that evidence. The original candidate has 
 as a complete package, used for model inference, or quality-qualified. Qualification requires exact
 corpus, evaluator, baseline, runtime, sample-count, NLL, token-agreement, and task-retention evidence
 against caller-supplied thresholds.
+The staged `int4_bringup_v1` policy is now independently bound to all 9,703 official tensors and all
+48 pinned shard headers. It keeps 292 sensitive tensors exact, assigns 9,411 tensors to grouped INT4,
+and estimates 17,527,623,424 encoded tensor bytes from 62,442,983,168 source bytes. Its evidence in
+`docs/evidence/glm47_int4_bringup_candidate.json` remains explicitly experimental.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds

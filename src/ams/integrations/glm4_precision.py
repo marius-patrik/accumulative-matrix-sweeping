@@ -61,6 +61,13 @@ class Glm4PrecisionCandidateStatus(StrEnum):
     EXPERIMENTAL = "experimental"
 
 
+class Glm4PrecisionProfile(StrEnum):
+    """Reviewed role maps with distinct capacity/accuracy purposes."""
+
+    TERNARY_CAPACITY = "ternary_capacity_v1"
+    INT4_BRINGUP = "int4_bringup_v1"
+
+
 @dataclass(frozen=True, slots=True)
 class Glm4PrecisionCandidate:
     candidate_hash: str
@@ -176,13 +183,32 @@ def experimental_glm4_encoding_for_role(
     role: Glm4MoeLiteTensorRole,
 ) -> HuggingFaceTensorEncoding:
     """Return the exact reviewed role assignment for the experimental candidate."""
+    return glm4_encoding_for_role(role, Glm4PrecisionProfile.TERNARY_CAPACITY)
+
+
+def accuracy_first_glm4_encoding_for_role(
+    role: Glm4MoeLiteTensorRole,
+) -> HuggingFaceTensorEncoding:
+    """Return the reviewed accuracy-first role assignment used for staged bring-up."""
+    return glm4_encoding_for_role(role, Glm4PrecisionProfile.INT4_BRINGUP)
+
+
+def glm4_encoding_for_role(
+    role: Glm4MoeLiteTensorRole,
+    profile: Glm4PrecisionProfile,
+) -> HuggingFaceTensorEncoding:
+    """Resolve one complete reviewed profile without implicit role fallbacks."""
     try:
         role = Glm4MoeLiteTensorRole(role)
     except ValueError as exc:
         raise AmsError(ErrorCode.INTERNAL_INVARIANT, "unreviewed GLM-4 precision role") from exc
+    try:
+        profile = Glm4PrecisionProfile(profile)
+    except ValueError as exc:
+        raise AmsError(ErrorCode.INTERNAL_INVARIANT, "unreviewed GLM-4 precision profile") from exc
     if role in _IDENTITY_ROLES:
         return HuggingFaceTensorEncoding.IDENTITY
-    if role in _TERNARY_ROLES:
+    if profile is Glm4PrecisionProfile.TERNARY_CAPACITY and role in _TERNARY_ROLES:
         return HuggingFaceTensorEncoding.TERNARY_TRIT5
     if role in set(Glm4MoeLiteTensorRole):
         return HuggingFaceTensorEncoding.INT4_SYMMETRIC
@@ -243,6 +269,44 @@ def build_experimental_glm4_precision_candidate(
     int4_config: Int4CodecConfig,
 ) -> Glm4PrecisionCandidate:
     """Build the reviewed metadata-only candidate without reading tensor payloads."""
+    return _build_glm4_precision_candidate(
+        architecture,
+        inventory,
+        tensors,
+        profile=Glm4PrecisionProfile.TERNARY_CAPACITY,
+        ternary_config=ternary_config,
+        int4_config=int4_config,
+    )
+
+
+def build_accuracy_first_glm4_precision_candidate(
+    architecture: Glm4MoeLiteArchitecture,
+    inventory: Glm4MoeLiteTensorInventory,
+    tensors: tuple[HuggingFaceCatalogTensor, ...],
+    *,
+    int4_config: Int4CodecConfig,
+) -> Glm4PrecisionCandidate:
+    """Build the INT4-expert bring-up candidate without claiming quality qualification."""
+    return _build_glm4_precision_candidate(
+        architecture,
+        inventory,
+        tensors,
+        profile=Glm4PrecisionProfile.INT4_BRINGUP,
+        ternary_config=None,
+        int4_config=int4_config,
+    )
+
+
+def _build_glm4_precision_candidate(
+    architecture: Glm4MoeLiteArchitecture,
+    inventory: Glm4MoeLiteTensorInventory,
+    tensors: tuple[HuggingFaceCatalogTensor, ...],
+    *,
+    profile: Glm4PrecisionProfile,
+    ternary_config: TernaryCodecConfig | None,
+    int4_config: Int4CodecConfig,
+) -> Glm4PrecisionCandidate:
+    """Apply one reviewed role profile through the shared candidate invariants."""
     tensor_by_name = _validated_catalog_by_name(architecture, inventory, tensors)
     assignments: list[HuggingFaceTensorAssignment] = []
     source_bytes = 0
@@ -250,12 +314,17 @@ def build_experimental_glm4_precision_candidate(
     encoding_counts = {encoding: 0 for encoding in HuggingFaceTensorEncoding}
     for slot in inventory.slots:
         tensor = tensor_by_name[slot.tensor_name]
-        encoding = experimental_glm4_encoding_for_role(slot.role)
+        encoding = glm4_encoding_for_role(slot.role, profile)
         element_count = checked_product(tensor.shape, name="glm4_precision.elements")
         if encoding is HuggingFaceTensorEncoding.IDENTITY:
             assignment = HuggingFaceTensorAssignment(slot.tensor_name, encoding)
             encoded_bytes = tensor.source_length
         elif encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5:
+            if ternary_config is None:
+                raise AmsError(
+                    ErrorCode.INTERNAL_INVARIANT,
+                    "ternary precision profile has no ternary codec config",
+                )
             assignment = HuggingFaceTensorAssignment(
                 slot.tensor_name,
                 encoding,

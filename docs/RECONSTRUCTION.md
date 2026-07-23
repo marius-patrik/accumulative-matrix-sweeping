@@ -261,6 +261,14 @@ The reconstruction branch currently contains:
   baseline, and candidate runtime, and clears every explicitly supplied token-count, task-count, NLL,
   token-agreement, and task-retention threshold. The repository intentionally supplies no default
   quality thresholds before a real baseline run.
+- the separate `int4_bringup_v1` metadata candidate required by that decision. It was range-audited
+  against all 48 exact official shard headers and assigns 292 identity tensors plus 9,411 grouped
+  INT4 tensors. `docs/evidence/glm47_int4_bringup_candidate.json` binds its candidate hash
+  `sha256:0b09bf971fe0ecce07d9f3801518c31cd2d574d18a98fb47faf132407b876850`
+  and policy hash
+  `sha256:c6af0d95cedb6b602196159cd0b420e14bda8a4612daabf42d101af07faa7e77`
+  to the 62,442,983,168-byte source inventory and 17,527,623,424-byte estimate. It is an
+  accuracy-first conversion profile, not quality qualification.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and

@@ -10,10 +10,12 @@ from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
     Glm4MoeLiteTensorRole,
     Glm4PrecisionCandidateStatus,
+    Glm4PrecisionProfile,
     Glm4PrecisionQualityEvidence,
     Glm4PrecisionQualityThresholds,
     HuggingFaceCatalogTensor,
     HuggingFaceTensorEncoding,
+    build_accuracy_first_glm4_precision_candidate,
     build_experimental_glm4_precision_candidate,
     expected_glm4_moe_lite_tensor_shape,
     expected_glm4_moe_lite_tensor_slots,
@@ -204,6 +206,54 @@ def test_candidate_is_deterministic_and_rejects_catalog_drift() -> None:
             int4_config=int4,
         )
     assert caught.value.code is ErrorCode.CAPABILITY_MISMATCH
+
+
+def test_accuracy_first_candidate_changes_only_compressed_roles_to_int4() -> None:
+    architecture, inventory, tensors, slots, _, int4, capacity = _candidate_fixture()
+    accuracy = build_accuracy_first_glm4_precision_candidate(
+        architecture,
+        inventory,
+        tensors,
+        int4_config=int4,
+    )
+    repeated = build_accuracy_first_glm4_precision_candidate(
+        architecture,
+        inventory,
+        tuple(reversed(tensors)),
+        int4_config=int4,
+    )
+
+    capacity_by_name = {assignment.tensor_name: assignment for assignment in capacity.assignments}
+    accuracy_by_name = {assignment.tensor_name: assignment for assignment in accuracy.assignments}
+    tensor_by_name = {tensor.tensor_name: tensor for tensor in tensors}
+    expected_bytes = 0
+    identity_count = 0
+    for slot in slots:
+        before = capacity_by_name[slot.tensor_name]
+        after = accuracy_by_name[slot.tensor_name]
+        if before.encoding is HuggingFaceTensorEncoding.IDENTITY:
+            assert after.encoding is HuggingFaceTensorEncoding.IDENTITY
+            expected_bytes += tensor_by_name[slot.tensor_name].source_length
+            identity_count += 1
+        else:
+            assert after.encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC
+            assert after.int4_config == int4
+            assert after.ternary_config is None
+            elements = 1
+            for dimension in tensor_by_name[slot.tensor_name].shape:
+                elements *= dimension
+            expected_bytes += int4.encoded_size(elements)
+
+    assert dict(accuracy.encoding_counts) == {
+        HuggingFaceTensorEncoding.IDENTITY: identity_count,
+        HuggingFaceTensorEncoding.INT4_SYMMETRIC: len(slots) - identity_count,
+    }
+    assert accuracy.estimated_encoded_bytes == expected_bytes
+    assert accuracy.candidate_hash != capacity.candidate_hash
+    assert accuracy.policy.policy_hash != capacity.policy.policy_hash
+    assert repeated.candidate_hash == accuracy.candidate_hash
+    assert repeated.policy.policy_hash == accuracy.policy.policy_hash
+    assert Glm4PrecisionProfile.INT4_BRINGUP.value == "int4_bringup_v1"
 
 
 def _evidence(candidate, **overrides):

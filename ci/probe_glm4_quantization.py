@@ -17,6 +17,7 @@ from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
     Glm4LowBitDiagnosticConfig,
     Glm4MoeLiteTensorRole,
+    Glm4PrecisionProfile,
     Glm4QuantizationCodecVariant,
     Glm4QuantizationProbeConfig,
     HuggingFaceCatalogTensor,
@@ -46,6 +47,7 @@ _CANDIDATE_FIELDS = {
     "header_bytes_read",
     "int4_config_hash",
     "policy_hash",
+    "profile",
     "repository",
     "revision",
     "source_bytes",
@@ -181,6 +183,7 @@ def _require_exact_evidence(
             if assignment.int4_config is not None
         ),
         "policy_hash": candidate.policy.policy_hash,
+        "profile": Glm4PrecisionProfile.TERNARY_CAPACITY.value,
         "repository": repository,
         "revision": revision,
         "source_bytes": candidate.source_bytes,

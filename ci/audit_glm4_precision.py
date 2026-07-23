@@ -12,9 +12,11 @@ from urllib.request import Request, urlopen
 
 from ams.codecs import Int4CodecConfig, TernaryCodecConfig
 from ams.integrations import (
+    Glm4PrecisionProfile,
     HuggingFaceCatalogPolicy,
     HuggingFaceShardSource,
     HuggingFaceTotalSizeSemantics,
+    build_accuracy_first_glm4_precision_candidate,
     build_experimental_glm4_precision_candidate,
     build_huggingface_header_catalog,
     parse_glm4_moe_lite_architecture,
@@ -39,6 +41,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--repository", required=True, help="Exact Hugging Face owner/model ID")
     parser.add_argument("--revision", required=True, help="Exact 40-character commit")
     parser.add_argument("--group-size", type=int, default=128)
+    parser.add_argument(
+        "--profile",
+        choices=tuple(profile.value for profile in Glm4PrecisionProfile),
+        default=Glm4PrecisionProfile.TERNARY_CAPACITY.value,
+        help="Exact reviewed role-assignment profile",
+    )
     return parser
 
 
@@ -128,13 +136,22 @@ def main() -> int:
     )
     ternary_config = TernaryCodecConfig(group_size=arguments.group_size)
     int4_config = Int4CodecConfig(group_size=arguments.group_size)
-    candidate = build_experimental_glm4_precision_candidate(
-        architecture,
-        inventory,
-        catalog.tensors,
-        ternary_config=ternary_config,
-        int4_config=int4_config,
-    )
+    profile = Glm4PrecisionProfile(arguments.profile)
+    if profile is Glm4PrecisionProfile.INT4_BRINGUP:
+        candidate = build_accuracy_first_glm4_precision_candidate(
+            architecture,
+            inventory,
+            catalog.tensors,
+            int4_config=int4_config,
+        )
+    else:
+        candidate = build_experimental_glm4_precision_candidate(
+            architecture,
+            inventory,
+            catalog.tensors,
+            ternary_config=ternary_config,
+            int4_config=int4_config,
+        )
     output = {
         "architecture_hash": candidate.architecture_hash,
         "candidate_hash": candidate.candidate_hash,
@@ -145,12 +162,15 @@ def main() -> int:
         "header_bytes_read": catalog.audit.prefix_and_header_bytes,
         "int4_config_hash": int4_config.config_hash,
         "policy_hash": candidate.policy.policy_hash,
+        "profile": profile.value,
         "repository": arguments.repository,
         "revision": arguments.revision,
         "source_bytes": candidate.source_bytes,
         "source_index_hash": candidate.source_index_hash,
         "status": candidate.status.value,
-        "ternary_config_hash": ternary_config.config_hash,
+        "ternary_config_hash": (
+            ternary_config.config_hash if profile is Glm4PrecisionProfile.TERNARY_CAPACITY else None
+        ),
         "tensor_count": len(candidate.assignments),
     }
     print(json.dumps(output, indent=2, sort_keys=True))
