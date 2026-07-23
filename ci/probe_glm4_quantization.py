@@ -15,6 +15,7 @@ from ams.codecs import Int4CodecConfig, TernaryCodecConfig
 from ams.descriptors import DType, StorageObject
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
+    Glm4LowBitDiagnosticConfig,
     Glm4MoeLiteTensorRole,
     Glm4QuantizationCodecVariant,
     Glm4QuantizationProbeConfig,
@@ -93,10 +94,22 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--group-size", type=int, default=128)
     parser.add_argument("--groups-per-tensor", type=int, default=64)
     parser.add_argument("--hash-buffer-bytes", type=int, default=1024 * 1024)
-    parser.add_argument(
+    comparison = parser.add_mutually_exclusive_group()
+    comparison.add_argument(
         "--compare-routed-experts",
         action="store_true",
-        help="Compare fixed ternary threshold variants and INT4 on identical routed-expert groups",
+        help=(
+            "Compare fixed ternary thresholds, two-pass ternary residuals, and INT4 "
+            "on identical routed-expert groups"
+        ),
+    )
+    comparison.add_argument(
+        "--compare-routed-expert-codecs",
+        action="store_true",
+        help=(
+            "Compare diagnostic INT2/INT3 and sparse-residual ternary candidates, "
+            "two-pass ternary, and INT4 on identical routed-expert groups"
+        ),
     )
     return parser
 
@@ -308,26 +321,86 @@ def _run(arguments: argparse.Namespace):
         groups_per_tensor=arguments.groups_per_tensor,
         hash_buffer_bytes=arguments.hash_buffer_bytes,
     )
-    if arguments.compare_routed_experts:
-        variants = (
-            *(
+    if arguments.compare_routed_experts or arguments.compare_routed_expert_codecs:
+        if arguments.compare_routed_expert_codecs:
+            variants = (
                 Glm4QuantizationCodecVariant(
-                    variant_id=f"ternary-threshold-{numerator:02d}-of-10",
-                    encoding="ternary_trit5",
+                    variant_id="int2-symmetric-midrise",
+                    encoding="int2_symmetric_midrise",
+                    diagnostic_config=Glm4LowBitDiagnosticConfig(
+                        encoding="int2_symmetric_midrise",
+                        group_size=arguments.group_size,
+                    ),
+                ),
+                Glm4QuantizationCodecVariant(
+                    variant_id="int3-symmetric",
+                    encoding="int3_symmetric",
+                    diagnostic_config=Glm4LowBitDiagnosticConfig(
+                        encoding="int3_symmetric",
+                        group_size=arguments.group_size,
+                    ),
+                ),
+                *(
+                    Glm4QuantizationCodecVariant(
+                        variant_id=f"ternary-threshold-08-sparse-bf16-k{residual_count:02d}",
+                        encoding="ternary_sparse_bf16_residual",
+                        diagnostic_config=Glm4LowBitDiagnosticConfig(
+                            encoding="ternary_sparse_bf16_residual",
+                            group_size=arguments.group_size,
+                            threshold_numerator=8,
+                            threshold_denominator=10,
+                            residual_count=residual_count,
+                        ),
+                    )
+                    for residual_count in (4, 8, 16)
+                ),
+                Glm4QuantizationCodecVariant(
+                    variant_id="residual2-ternary-threshold-08-of-10",
+                    encoding="ternary_residual2",
                     ternary_config=TernaryCodecConfig(
                         group_size=arguments.group_size,
-                        threshold_numerator=numerator,
+                        threshold_numerator=8,
                         threshold_denominator=10,
                     ),
-                )
-                for numerator in range(3, 11)
-            ),
-            Glm4QuantizationCodecVariant(
-                variant_id="int4-symmetric",
-                encoding="int4_symmetric",
-                int4_config=int4_config,
-            ),
-        )
+                ),
+                Glm4QuantizationCodecVariant(
+                    variant_id="int4-symmetric",
+                    encoding="int4_symmetric",
+                    int4_config=int4_config,
+                ),
+            )
+        else:
+            variants = (
+                *(
+                    Glm4QuantizationCodecVariant(
+                        variant_id=f"ternary-threshold-{numerator:02d}-of-10",
+                        encoding="ternary_trit5",
+                        ternary_config=TernaryCodecConfig(
+                            group_size=arguments.group_size,
+                            threshold_numerator=numerator,
+                            threshold_denominator=10,
+                        ),
+                    )
+                    for numerator in range(3, 11)
+                ),
+                *(
+                    Glm4QuantizationCodecVariant(
+                        variant_id=f"residual2-ternary-threshold-{numerator:02d}-of-10",
+                        encoding="ternary_residual2",
+                        ternary_config=TernaryCodecConfig(
+                            group_size=arguments.group_size,
+                            threshold_numerator=numerator,
+                            threshold_denominator=10,
+                        ),
+                    )
+                    for numerator in (7, 8)
+                ),
+                Glm4QuantizationCodecVariant(
+                    variant_id="int4-symmetric",
+                    encoding="int4_symmetric",
+                    int4_config=int4_config,
+                ),
+            )
         return compare_glm4_quantization_variants(
             architecture,
             inventory,

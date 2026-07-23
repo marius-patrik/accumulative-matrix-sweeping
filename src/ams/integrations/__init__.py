@@ -21,12 +21,14 @@ from ams.integrations.glm4_precision import (
     qualify_glm4_precision_candidate,
 )
 from ams.integrations.glm4_quantization_probe import (
+    Glm4LowBitDiagnosticConfig,
     Glm4QuantizationCodecVariant,
     Glm4QuantizationComparisonEvidence,
     Glm4QuantizationErrorMetrics,
     Glm4QuantizationProbeConfig,
     Glm4QuantizationProbeEvidence,
     Glm4QuantizationProbeStatus,
+    Glm4QuantizationVariantEncoding,
     Glm4QuantizationVariantMetrics,
     compare_glm4_quantization_variants,
     probe_experimental_glm4_quantization_shard,
@@ -104,6 +106,7 @@ from ams.integrations.safetensors import (
 __all__ = [
     "OFFICIAL_GLM4_TOKENIZER_POLICY",
     "Glm4AddedToken",
+    "Glm4LowBitDiagnosticConfig",
     "Glm4MoeLiteArchitecture",
     "Glm4MoeLiteTensorInventory",
     "Glm4MoeLiteTensorRole",
@@ -119,6 +122,7 @@ __all__ = [
     "Glm4QuantizationProbeConfig",
     "Glm4QuantizationProbeEvidence",
     "Glm4QuantizationProbeStatus",
+    "Glm4QuantizationVariantEncoding",
     "Glm4QuantizationVariantMetrics",
     "Glm4TokenizerAssets",
     "Glm4TokenizerFile",

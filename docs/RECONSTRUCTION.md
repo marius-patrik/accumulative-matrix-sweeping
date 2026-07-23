@@ -241,9 +241,20 @@ The reconstruction branch currently contains:
   INT4 to the identical 12,288 sampled routed-expert groups. Threshold 0.8 was the best ternary result
   at 0.900846 cosine similarity and 0.434139 normalized RMS error; INT4 reached 0.993172 and 0.117545
   while using 320,864,256 bytes versus ternary's 141,557,760 bytes for the 192 selected tensors.
+  A second trit5 pass over the first pass's residual reaches 0.980502 cosine and 0.200455 normalized
+  RMS error at 283,115,520 selected bytes. Across all 47 equal routed-expert sets, that implies a
+  15,753,432,832-byte full mixed payload, versus 17,527,623,424 for all-expert INT4 and
+  9,100,218,112 for the original ternary candidate.
   `docs/evidence/glm47_shard2_routed_expert_comparison.json` therefore records
-  `requires_higher_capacity_candidate`: threshold tuning alone is rejected, and 2/3-bit or
-  residual-assisted expert encodings must be compared before full conversion. A candidate can become
+  `residual2_requires_layer_quality_validation`: threshold tuning alone is rejected.
+  A broader authenticated comparison then applied an exact signed INT3 codec, 2-bit mid-rise, and
+  sparse BF16 residual ternary variants to the same 12,288 groups. INT3 reached 0.964606 cosine and
+  0.274070 normalized RMS error at 245,366,784 bytes. Two-pass ternary remains the strongest
+  sub-INT4 reconstruction candidate at 283,115,520 bytes; sparse K8 is both larger and worse than
+  INT3, while sparse K16 is both larger and worse than two-pass ternary. The resulting
+  `docs/evidence/glm47_shard2_expert_codec_comparison.json` records
+  `int4_bringup_then_residual2_ab`: implement the complete GLM-4.7 package with accuracy-first INT4,
+  then compare it end to end with two-pass ternary before any GLM-5.2 conversion. A candidate can become
   qualified only
   through evidence that
   identifies the exact source/candidate, calibration and evaluation corpora, evaluator, trusted

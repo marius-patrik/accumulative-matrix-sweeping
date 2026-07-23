@@ -11,10 +11,13 @@ from enum import StrEnum
 from ams.canonical import canonical_json_bytes
 from ams.checked import checked_add, checked_mul, checked_positive, checked_product
 from ams.codecs import (
+    Int3DiagnosticCodecConfig,
     Int4CodecConfig,
     TernaryCodecConfig,
+    decode_int3_group_reference,
     decode_int4_group_reference,
     decode_ternary_group_reference,
+    encode_int3_group_reference,
     encode_int4_group_reference,
     encode_ternary_group_reference,
 )
@@ -48,6 +51,243 @@ class Glm4QuantizationProbeStatus(StrEnum):
     """Tensor-error sampling is diagnostic evidence, never a quality qualification."""
 
     DIAGNOSTIC = "diagnostic"
+
+
+class Glm4QuantizationVariantEncoding(StrEnum):
+    """Diagnostic encodings; only established codecs may become package assignments."""
+
+    INT2_SYMMETRIC_MIDRISE = "int2_symmetric_midrise"
+    INT3_SYMMETRIC = "int3_symmetric"
+    TERNARY_TRIT5 = "ternary_trit5"
+    TERNARY_RESIDUAL2 = "ternary_residual2"
+    TERNARY_SPARSE_BF16_RESIDUAL = "ternary_sparse_bf16_residual"
+    INT4_SYMMETRIC = "int4_symmetric"
+
+
+@dataclass(frozen=True, slots=True)
+class Glm4LowBitDiagnosticConfig:
+    """Exact simulated semantics for formats not yet admitted to AMS packages."""
+
+    encoding: Glm4QuantizationVariantEncoding
+    group_size: int = 128
+    threshold_numerator: int | None = None
+    threshold_denominator: int | None = None
+    residual_count: int = 0
+    version: str = "diagnostic-1"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "encoding",
+            Glm4QuantizationVariantEncoding(self.encoding),
+        )
+        checked_positive(self.group_size, name="glm4_diagnostic_codec.group_size")
+        if self.group_size > 256:
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "diagnostic codec group size exceeds uint8 residual positions",
+            )
+        if self.version != "diagnostic-1":
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "unsupported diagnostic codec version",
+            )
+        if self.encoding is Glm4QuantizationVariantEncoding.TERNARY_SPARSE_BF16_RESIDUAL:
+            if (
+                isinstance(self.threshold_numerator, bool)
+                or not isinstance(self.threshold_numerator, int)
+                or isinstance(self.threshold_denominator, bool)
+                or not isinstance(self.threshold_denominator, int)
+            ):
+                raise AmsError(
+                    ErrorCode.PLAN_INVALID,
+                    "sparse ternary residual requires an integer threshold ratio",
+                )
+            checked_positive(
+                self.threshold_numerator,
+                name="glm4_diagnostic_codec.threshold_numerator",
+            )
+            checked_positive(
+                self.threshold_denominator,
+                name="glm4_diagnostic_codec.threshold_denominator",
+            )
+            if self.threshold_numerator > self.threshold_denominator:
+                raise AmsError(
+                    ErrorCode.PLAN_INVALID,
+                    "sparse ternary residual threshold ratio must not exceed one",
+                )
+            checked_positive(
+                self.residual_count,
+                name="glm4_diagnostic_codec.residual_count",
+            )
+            if self.residual_count > self.group_size:
+                raise AmsError(
+                    ErrorCode.PLAN_INVALID,
+                    "sparse ternary residual count exceeds the group size",
+                )
+        elif self.encoding not in {
+            Glm4QuantizationVariantEncoding.INT2_SYMMETRIC_MIDRISE,
+            Glm4QuantizationVariantEncoding.INT3_SYMMETRIC,
+        }:
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "established or residual-pass codecs cannot use a diagnostic config",
+            )
+        elif (
+            self.threshold_numerator is not None
+            or self.threshold_denominator is not None
+            or self.residual_count != 0
+        ):
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "uniform diagnostic codecs cannot declare residual fields",
+            )
+
+    @property
+    def config_hash(self) -> str:
+        if self.encoding is Glm4QuantizationVariantEncoding.INT3_SYMMETRIC:
+            return Int3DiagnosticCodecConfig(group_size=self.group_size).config_hash
+        payload: dict[str, int | str] = {
+            "encoding": self.encoding.value,
+            "group_size": self.group_size,
+            "scale_dtype": "float32",
+            "version": self.version,
+        }
+        if self.encoding is Glm4QuantizationVariantEncoding.TERNARY_SPARSE_BF16_RESIDUAL:
+            assert self.threshold_numerator is not None
+            assert self.threshold_denominator is not None
+            payload.update(
+                {
+                    "base_packing": "trit5",
+                    "residual_count": self.residual_count,
+                    "residual_dtype": "bfloat16",
+                    "residual_position_dtype": "uint8",
+                    "threshold_denominator": self.threshold_denominator,
+                    "threshold_numerator": self.threshold_numerator,
+                }
+            )
+        return "sha256:" + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+    def group_record_size(self, element_count: int) -> int:
+        checked_positive(
+            element_count,
+            name="glm4_diagnostic_codec.group_element_count",
+        )
+        if element_count > self.group_size:
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "diagnostic codec group exceeds configured group size",
+            )
+        if self.encoding is Glm4QuantizationVariantEncoding.INT2_SYMMETRIC_MIDRISE:
+            bit_count = checked_mul(element_count, 2, name="glm4_int2.bits")
+            return 4 + (bit_count + 7) // 8
+        if self.encoding is Glm4QuantizationVariantEncoding.INT3_SYMMETRIC:
+            return Int3DiagnosticCodecConfig(group_size=self.group_size).group_record_size(
+                element_count
+            )
+        residuals = min(self.residual_count, element_count)
+        ternary_bytes = 4 + (element_count + 4) // 5
+        return checked_add(
+            ternary_bytes,
+            checked_mul(residuals, 3, name="glm4_residual.entries"),
+            name="glm4_residual.record_bytes",
+        )
+
+    def encoded_size(self, element_count: int) -> int:
+        checked_positive(element_count, name="glm4_diagnostic_codec.element_count")
+        groups = (element_count - 1) // self.group_size + 1
+        full_records = checked_mul(
+            max(groups - 1, 0),
+            self.group_record_size(self.group_size),
+            name="glm4_diagnostic_codec.full_records",
+        )
+        tail_count = element_count - (groups - 1) * self.group_size
+        return checked_add(
+            full_records,
+            self.group_record_size(tail_count),
+            name="glm4_diagnostic_codec.encoded_bytes",
+        )
+
+    def reconstruct(self, values: list[float]) -> list[float]:
+        if not values or len(values) > self.group_size:
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "diagnostic codec values must contain one bounded group",
+            )
+        if not all(
+            not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+            for value in values
+        ):
+            raise AmsError(
+                ErrorCode.NUMERIC_FAILURE,
+                "diagnostic codec source contains a non-finite or nonnumeric value",
+            )
+        if self.encoding is Glm4QuantizationVariantEncoding.INT2_SYMMETRIC_MIDRISE:
+            return _reconstruct_int2_midrise(values)
+        if self.encoding is Glm4QuantizationVariantEncoding.INT3_SYMMETRIC:
+            config = Int3DiagnosticCodecConfig(group_size=self.group_size)
+            payload = encode_int3_group_reference(values, config)
+            return decode_int3_group_reference(payload, len(values))
+        assert self.threshold_numerator is not None
+        assert self.threshold_denominator is not None
+        ternary_config = TernaryCodecConfig(
+            group_size=self.group_size,
+            threshold_numerator=self.threshold_numerator,
+            threshold_denominator=self.threshold_denominator,
+        )
+        payload = encode_ternary_group_reference(values, ternary_config)
+        reconstructed = decode_ternary_group_reference(payload, len(values))
+        ranked_residuals = sorted(
+            (
+                (abs(source - approximate), index, source - approximate)
+                for index, (source, approximate) in enumerate(
+                    zip(values, reconstructed, strict=True)
+                )
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+        for _, index, residual in ranked_residuals[: self.residual_count]:
+            reconstructed[index] += _round_bfloat16(residual)
+        return reconstructed
+
+
+def _round_float32(value: float) -> float:
+    try:
+        return struct.unpack("<f", struct.pack("<f", value))[0]
+    except (OverflowError, struct.error) as exc:
+        raise AmsError(
+            ErrorCode.NUMERIC_FAILURE,
+            "diagnostic codec scale is not representable as float32",
+        ) from exc
+
+
+def _round_bfloat16(value: float) -> float:
+    """Round a finite value to BF16 with round-to-nearest, ties-to-even."""
+
+    bits = struct.unpack("<I", struct.pack("<f", _round_float32(value)))[0]
+    rounded = bits + 0x7FFF + ((bits >> 16) & 1)
+    return struct.unpack("<f", struct.pack("<I", rounded & 0xFFFF0000))[0]
+
+
+def _reconstruct_int2_midrise(values: list[float]) -> list[float]:
+    maximum = max(abs(value) for value in values)
+    scale = _round_float32(maximum)
+    if scale == 0.0:
+        return [0.0] * len(values)
+    levels = (-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0)
+    output = []
+    for value in values:
+        normalized = value / scale
+        level = min(
+            levels,
+            key=lambda candidate: (
+                abs(normalized - candidate),
+                0 if candidate > 0.0 and value >= 0.0 else 1,
+                abs(candidate),
+            ),
+        )
+        output.append(scale * level)
+    return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,14 +374,34 @@ class Glm4QuantizationCodecVariant:
     """One exact low-bit codec configuration applied to identical sampled source groups."""
 
     variant_id: str
-    encoding: HuggingFaceTensorEncoding
+    encoding: Glm4QuantizationVariantEncoding
     ternary_config: TernaryCodecConfig | None = None
     int4_config: Int4CodecConfig | None = None
+    diagnostic_config: Glm4LowBitDiagnosticConfig | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.variant_id, name="glm4_probe.variant_id")
-        object.__setattr__(self, "encoding", HuggingFaceTensorEncoding(self.encoding))
-        if self.encoding is HuggingFaceTensorEncoding.TERNARY_TRIT5:
+        object.__setattr__(self, "encoding", Glm4QuantizationVariantEncoding(self.encoding))
+        if self.diagnostic_config is not None:
+            if (
+                not isinstance(self.diagnostic_config, Glm4LowBitDiagnosticConfig)
+                or self.ternary_config is not None
+                or self.int4_config is not None
+            ):
+                raise AmsError(
+                    ErrorCode.PLAN_INVALID,
+                    "diagnostic comparison variant requires only a diagnostic config",
+                )
+            if self.encoding is not self.diagnostic_config.encoding:
+                raise AmsError(
+                    ErrorCode.PLAN_INVALID,
+                    "diagnostic comparison encoding disagrees with its config",
+                )
+            return
+        if self.encoding in {
+            Glm4QuantizationVariantEncoding.TERNARY_TRIT5,
+            Glm4QuantizationVariantEncoding.TERNARY_RESIDUAL2,
+        }:
             if (
                 not isinstance(self.ternary_config, TernaryCodecConfig)
                 or self.int4_config is not None
@@ -150,7 +410,7 @@ class Glm4QuantizationCodecVariant:
                     ErrorCode.PLAN_INVALID,
                     "ternary comparison variant requires only a ternary config",
                 )
-        elif self.encoding is HuggingFaceTensorEncoding.INT4_SYMMETRIC:
+        elif self.encoding is Glm4QuantizationVariantEncoding.INT4_SYMMETRIC:
             if not isinstance(self.int4_config, Int4CodecConfig) or self.ternary_config is not None:
                 raise AmsError(
                     ErrorCode.PLAN_INVALID,
@@ -164,7 +424,16 @@ class Glm4QuantizationCodecVariant:
 
     @property
     def codec_config_hash(self) -> str:
+        if self.diagnostic_config is not None:
+            return self.diagnostic_config.config_hash
         if self.ternary_config is not None:
+            if self.encoding is Glm4QuantizationVariantEncoding.TERNARY_RESIDUAL2:
+                payload = {
+                    "base_ternary_config_hash": self.ternary_config.config_hash,
+                    "residual_passes": 2,
+                    "version": "1.0.0",
+                }
+                return "sha256:" + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
             return self.ternary_config.config_hash
         if self.int4_config is not None:
             return self.int4_config.config_hash
@@ -172,6 +441,8 @@ class Glm4QuantizationCodecVariant:
 
     @property
     def group_size(self) -> int:
+        if self.diagnostic_config is not None:
+            return self.diagnostic_config.group_size
         if self.ternary_config is not None:
             return self.ternary_config.group_size
         if self.int4_config is not None:
@@ -188,16 +459,47 @@ class Glm4QuantizationCodecVariant:
         return "sha256:" + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 
     def encoded_size(self, element_count: int) -> int:
+        if self.diagnostic_config is not None:
+            return self.diagnostic_config.encoded_size(element_count)
         if self.ternary_config is not None:
-            return self.ternary_config.encoded_size(element_count)
+            encoded_bytes = self.ternary_config.encoded_size(element_count)
+            if self.encoding is Glm4QuantizationVariantEncoding.TERNARY_RESIDUAL2:
+                return checked_mul(
+                    encoded_bytes,
+                    2,
+                    name="glm4_comparison.residual_ternary_bytes",
+                )
+            return encoded_bytes
         if self.int4_config is not None:
             return self.int4_config.encoded_size(element_count)
         raise AmsError(ErrorCode.INTERNAL_INVARIANT, "comparison variant has no size contract")
 
     def reconstruct(self, values: list[float]) -> list[float]:
+        if self.diagnostic_config is not None:
+            return self.diagnostic_config.reconstruct(values)
         if self.ternary_config is not None:
             payload = encode_ternary_group_reference(values, self.ternary_config)
-            return decode_ternary_group_reference(payload, len(values))
+            first = decode_ternary_group_reference(payload, len(values))
+            if self.encoding is Glm4QuantizationVariantEncoding.TERNARY_TRIT5:
+                return first
+            if self.encoding is Glm4QuantizationVariantEncoding.TERNARY_RESIDUAL2:
+                residual = [
+                    source_value - first_value
+                    for source_value, first_value in zip(values, first, strict=True)
+                ]
+                residual_payload = encode_ternary_group_reference(
+                    residual,
+                    self.ternary_config,
+                )
+                second = decode_ternary_group_reference(residual_payload, len(values))
+                return [
+                    first_value + second_value
+                    for first_value, second_value in zip(first, second, strict=True)
+                ]
+            raise AmsError(
+                ErrorCode.INTERNAL_INVARIANT,
+                "ternary comparison variant has an unknown diagnostic encoding",
+            )
         if self.int4_config is not None:
             payload = encode_int4_group_reference(values, self.int4_config)
             return decode_int4_group_reference(payload, len(values))
@@ -210,7 +512,7 @@ class Glm4QuantizationVariantMetrics:
 
     variant_id: str
     variant_hash: str
-    encoding: HuggingFaceTensorEncoding
+    encoding: Glm4QuantizationVariantEncoding
     codec_config_hash: str
     group_size: int
     selected_tensor_encoded_bytes: int

@@ -1,8 +1,8 @@
 {
   "baseline_candidate_hash": "sha256:3c9c4d9985986f40ea1c04860729c93dd900bbd9f5256558cc0e991cf8dcc0ba",
   "baseline_policy_hash": "sha256:b954d6e6f55551919d6cfc38eb6d7738bfb21e5530144f1ac6e6d7af06df6717",
-  "comparison_hash": "sha256:002cf809fbedd170dd81c80cd75ac4dfc769c3a6712d309f6ba24e1b3221231b",
-  "decision_status": "requires_higher_capacity_candidate",
+  "comparison_hash": "sha256:403008a413c420aee70134e09fcba2e3ebebe609f558e88d7d63afd7d6332f3e",
+  "decision_status": "residual2_requires_layer_quality_validation",
   "group_size": 128,
   "groups_per_tensor": 64,
   "integrity_bytes_read": 1270648128,
@@ -34,6 +34,28 @@
       "selected_tensor_encoded_bytes": 320864256,
       "variant_hash": "sha256:441a3197609051d8cd04264ea16ccaf04697198b3566dc182b3e9ad8ae0fc4e7",
       "variant_id": "int4-symmetric"
+    },
+    {
+      "codec_config_hash": "sha256:80d5e4486fc97be20e25733077fd0232e4a036a3263fe75e34441b5913b0978c",
+      "cosine_similarity": 0.9790085685040495,
+      "encoding": "ternary_residual2",
+      "normalized_mean_absolute_error": 0.1753331143660187,
+      "normalized_root_mean_square_error": 0.20906411703410077,
+      "reconstructed_zero_fraction": 0.19075965881347656,
+      "selected_tensor_encoded_bytes": 283115520,
+      "variant_hash": "sha256:81064fd2c1d7da6bde0f49eb226bd0ab0642aee84a03d2dd8f5479b4f30a177b",
+      "variant_id": "residual2-ternary-threshold-07-of-10"
+    },
+    {
+      "codec_config_hash": "sha256:b028dcad5a96418b936e7cec761f3c195d8fc6068d6b955aed8359ddd771b9b3",
+      "cosine_similarity": 0.9805015653892943,
+      "encoding": "ternary_residual2",
+      "normalized_mean_absolute_error": 0.1753560494786324,
+      "normalized_root_mean_square_error": 0.20045466131651093,
+      "reconstructed_zero_fraction": 0.22072347005208334,
+      "selected_tensor_encoded_bytes": 283115520,
+      "variant_hash": "sha256:fe53422a5690bbf703d87ff9a0db58ce35231ce3a5f1d8af87ab36a5114363de",
+      "variant_id": "residual2-ternary-threshold-08-of-10"
     },
     {
       "codec_config_hash": "sha256:4631db8496740ff42a5b0526ea913d7dc55eaeadd7067264912a41effbd4acb5",

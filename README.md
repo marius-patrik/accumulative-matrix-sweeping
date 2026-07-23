@@ -144,9 +144,14 @@ evidence—not a quality pass—and makes the blanket expert-ternary assignment 
 target for later alternatives. A same-sample sweep across ternary thresholds 0.3 through 1.0 found
 only a marginal best result at 0.8 (0.90085 cosine, 0.43414 normalized RMS error), while symmetric
 INT4 reached 0.99317 and 0.11754 on those exact routed-expert groups. Threshold calibration alone is
-therefore rejected for the full conversion; a higher-capacity 2/3-bit or residual-assisted candidate
-must be measured next. The candidate remains experimental: it has not been converted as a
-complete package, used for model inference, or quality-qualified. Qualification requires exact
+therefore rejected for the full conversion. Two-pass residual ternary at threshold 0.8 improves to
+0.98050 and 0.20045 while estimating 15,753,432,832 full tensor bytes, versus 17,527,623,424 bytes for
+all-expert INT4. A subsequent exact INT3 codec reached 0.96461 cosine and 0.27407 normalized RMS error
+at 245,366,784 bytes for the same tensors; sparse BF16 residual variants were dominated by INT3 or
+two-pass ternary. The staged decision is therefore accuracy-first INT4 for the first complete
+GLM-4.7 package, followed by an end-to-end A/B against two-pass ternary. Neither is qualified, and
+GLM-5.2 conversion remains blocked on that evidence. The original candidate has not been converted
+as a complete package, used for model inference, or quality-qualified. Qualification requires exact
 corpus, evaluator, baseline, runtime, sample-count, NLL, token-agreement, and task-retention evidence
 against caller-supplied thresholds.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a

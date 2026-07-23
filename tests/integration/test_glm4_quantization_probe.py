@@ -9,6 +9,7 @@ from ams.canonical import canonical_json_bytes
 from ams.codecs import Int4CodecConfig, TernaryCodecConfig
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
+    Glm4LowBitDiagnosticConfig,
     Glm4MoeLiteTensorRole,
     Glm4QuantizationCodecVariant,
     Glm4QuantizationProbeConfig,
@@ -291,6 +292,151 @@ def test_comparison_rejects_different_group_windows_before_source_io() -> None:
         )
     assert caught.value.code is ErrorCode.CAPABILITY_MISMATCH
     assert reader.reads == []
+
+
+def test_residual_ternary_variant_is_distinct_bounded_and_improves_fixture_error() -> None:
+    config = TernaryCodecConfig(group_size=8)
+    source = [-5.0, -3.0, -1.0, -0.25, 0.5, 1.5, 3.5, 6.0]
+    single = Glm4QuantizationCodecVariant(
+        "ternary",
+        "ternary_trit5",
+        ternary_config=config,
+    )
+    residual = Glm4QuantizationCodecVariant(
+        "residual2",
+        "ternary_residual2",
+        ternary_config=config,
+    )
+    single_values = single.reconstruct(source)
+    residual_values = residual.reconstruct(source)
+    single_error = sum(
+        (source_value - reconstructed) ** 2
+        for source_value, reconstructed in zip(source, single_values, strict=True)
+    )
+    residual_error = sum(
+        (source_value - reconstructed) ** 2
+        for source_value, reconstructed in zip(source, residual_values, strict=True)
+    )
+    assert residual_error < single_error
+    assert residual.encoded_size(len(source)) == single.encoded_size(len(source)) * 2
+    assert residual.codec_config_hash != single.codec_config_hash
+    assert residual.variant_hash != single.variant_hash
+
+
+def test_low_bit_diagnostic_sizes_reconstruction_and_hashes_are_exact() -> None:
+    int2 = Glm4LowBitDiagnosticConfig("int2_symmetric_midrise", group_size=128)
+    int3 = Glm4LowBitDiagnosticConfig("int3_symmetric", group_size=128)
+    residual = Glm4LowBitDiagnosticConfig(
+        "ternary_sparse_bf16_residual",
+        group_size=128,
+        threshold_numerator=8,
+        threshold_denominator=10,
+        residual_count=8,
+    )
+
+    assert int2.group_record_size(128) == 36
+    assert int2.encoded_size(129) == 41
+    assert int3.group_record_size(128) == 52
+    assert int3.encoded_size(129) == 57
+    assert residual.group_record_size(128) == 54
+    assert residual.encoded_size(129) == 62
+    assert (
+        int2.config_hash
+        == Glm4LowBitDiagnosticConfig(
+            "int2_symmetric_midrise",
+            group_size=128,
+        ).config_hash
+    )
+    assert len({int2.config_hash, int3.config_hash, residual.config_hash}) == 3
+
+    values = [-3.0, -1.0, 0.0, 1.0, 3.0]
+    assert int2.reconstruct([0.0, 0.0]) == [0.0, 0.0]
+    assert int3.reconstruct(values) == values
+    assert residual.reconstruct(values) == values
+    assert residual.reconstruct(values) == residual.reconstruct(values)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message", "error_code"),
+    [
+        (
+            {
+                "encoding": "ternary_sparse_bf16_residual",
+                "threshold_numerator": 8,
+                "threshold_denominator": 10,
+                "residual_count": 0,
+            },
+            "residual_count",
+            ErrorCode.INVALID_PACKAGE,
+        ),
+        (
+            {
+                "encoding": "ternary_sparse_bf16_residual",
+                "threshold_numerator": 11,
+                "threshold_denominator": 10,
+                "residual_count": 4,
+            },
+            "must not exceed one",
+            ErrorCode.PLAN_INVALID,
+        ),
+        (
+            {
+                "encoding": "int3_symmetric",
+                "threshold_numerator": 8,
+            },
+            "cannot declare",
+            ErrorCode.PLAN_INVALID,
+        ),
+    ],
+)
+def test_low_bit_diagnostic_rejects_ambiguous_configs(
+    kwargs,
+    message: str,
+    error_code: ErrorCode,
+) -> None:
+    with pytest.raises(AmsError, match=message) as caught:
+        Glm4LowBitDiagnosticConfig(**kwargs)
+    assert caught.value.code is error_code
+
+
+def test_comparison_keeps_low_bit_diagnostics_nonqualifying() -> None:
+    payload = _safetensors_payload()
+    reader = ObservedMemoryReader(payload)
+    architecture, index, inventory = _index()
+    comparison = compare_glm4_quantization_variants(
+        architecture,
+        inventory,
+        index,
+        source_repository="fixture/glm4",
+        source_revision="fixture-revision",
+        shard_name=_SHARD,
+        reader=reader,
+        expected_shard_hash=_digest(payload),
+        baseline_candidate_hash=_digest("candidate"),
+        baseline_policy_hash=_digest("policy"),
+        selected_roles=(Glm4MoeLiteTensorRole.ROUTED_EXPERT_GATE_PROJECTION,),
+        variants=(
+            Glm4QuantizationCodecVariant(
+                "int3-symmetric",
+                "int3_symmetric",
+                diagnostic_config=Glm4LowBitDiagnosticConfig(
+                    "int3_symmetric",
+                    group_size=4,
+                ),
+            ),
+            Glm4QuantizationCodecVariant(
+                "int4-symmetric",
+                "int4_symmetric",
+                int4_config=Int4CodecConfig(group_size=4),
+            ),
+        ),
+        config=Glm4QuantizationProbeConfig(groups_per_tensor=2, hash_buffer_bytes=7),
+    )
+
+    variants = {variant.variant_id: variant for variant in comparison.variants}
+    assert variants["int3-symmetric"].encoding.value == "int3_symmetric"
+    assert variants["int3-symmetric"].selected_tensor_encoded_bytes == 18
+    assert comparison.qualifies_precision_policy is False
 
 
 def test_committed_official_shard_evidence_is_nonqualifying_and_self_consistent() -> None:
