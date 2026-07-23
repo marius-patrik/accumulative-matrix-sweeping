@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import struct
@@ -17,6 +18,7 @@ from ams.descriptors import DType, StorageObject, validate_digest, validate_iden
 from ams.errors import AmsError, ErrorCode
 from ams.integrations.glm4_moe_lite import (
     Glm4MoeLiteArchitecture,
+    Glm4MoeLiteTensorRole,
     expected_glm4_moe_lite_tensor_shape,
     expected_glm4_moe_lite_tensor_slots,
     parse_glm4_moe_lite_architecture,
@@ -147,6 +149,79 @@ class GlmPackageReadEvidence:
     verification_bytes: int
     range_read_bytes: int
     maximum_read_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class Glm4NativeStorageBinding:
+    """One admitted immutable object available to a native GLM-4 reader registry."""
+
+    object_id: str
+    absolute_path: str
+    size_bytes: int
+    alignment_bytes: int
+    content_hash: str
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class Glm4NativeTensorBinding:
+    """One exact GLM-4 tensor range and its native codec parameters."""
+
+    tensor_name: str
+    role: Glm4MoeLiteTensorRole
+    layer_index: int | None
+    expert_index: int | None
+    mtp: bool
+    shape: tuple[int, ...]
+    logical_dtype: DType
+    encoding: str
+    storage_index: int
+    offset: int
+    encoded_bytes: int
+    decoded_bytes: int
+    codec_group_size: int | None
+    codec_config_hash: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Glm4NativeBindingPlan:
+    """Immutable package-to-native GLM-4 handoff with explicit resource policy."""
+
+    schema_id: str
+    binding_hash: str
+    package_id: str
+    manifest_content_root: str
+    architecture: Glm4MoeLiteArchitecture
+    storage_objects: tuple[Glm4NativeStorageBinding, ...]
+    tensors: tuple[Glm4NativeTensorBinding, ...]
+    linear_arena_bytes: int
+    context_capacity_tokens: int
+    cache_key_dtype: DType
+    cache_value_dtype: DType
+    cache_storage_bytes_per_layer: int
+    cache_storage_bytes_total: int
+    cache_staging_bytes_per_layer: int
+    tokenizer_vocabulary_size: int
+    eos_token_ids: tuple[int, ...]
+
+    @property
+    def executable_tensor_count(self) -> int:
+        """Return the base-model inventory, excluding separately marked MTP tensors."""
+        return sum(not tensor.mtp for tensor in self.tensors)
+
+    @property
+    def mtp_tensor_count(self) -> int:
+        """Return the separately admitted but not yet executable MTP inventory."""
+        return sum(tensor.mtp for tensor in self.tensors)
+
+    @property
+    def encoding_counts(self) -> tuple[tuple[str, int], ...]:
+        """Return deterministic encoding counts for audit and qualification output."""
+        encodings = {tensor.encoding for tensor in self.tensors}
+        return tuple(
+            (encoding, sum(tensor.encoding == encoding for tensor in self.tensors))
+            for encoding in sorted(encodings)
+        )
 
 
 def _parse_manifest_payload(path: Path, max_manifest_bytes: int) -> dict[str, Any]:
@@ -404,7 +479,8 @@ def _parse_tensor(
     validate_digest(byte_range["checksum"], name="chunk.range.checksum")
     reader = objects[object_id]
     if (
-        length != encoded_bytes
+        reader.reader.descriptor.kind != "tensor_data"
+        or length != encoded_bytes
         or checked_add(offset, length, name="chunk.range.end") > reader.size_bytes
         or byte_range["checksum"] != reader.reader.descriptor.content_hash
     ):
@@ -463,11 +539,15 @@ class GlmPackageWeights(GlmWeightAccess):
         architecture: GlmMoeDsaArchitecture | Glm4MoeLiteArchitecture,
         tensors: dict[str, _PackageTensor],
         *,
+        package_id: str,
+        manifest_content_root: str,
         linear_arena_bytes: int,
     ) -> None:
         checked_positive(linear_arena_bytes, name="package.linear_arena_bytes")
         self.architecture = architecture
         self._tensors = tensors
+        self._package_id = package_id
+        self._manifest_content_root = manifest_content_root
         self._linear_arena_bytes = linear_arena_bytes
 
     @property
@@ -519,6 +599,7 @@ class GlmPackageWeights(GlmWeightAccess):
             "minor": 0,
         }:
             raise AmsError(ErrorCode.CAPABILITY_MISMATCH, "AMS manifest version is unsupported")
+        package_id = validate_identifier(manifest["package_id"], name="manifest.package_id")
         required_features = _array(manifest["required_features"], name="required_features")
         if (
             any(not isinstance(feature, str) for feature in required_features)
@@ -602,7 +683,241 @@ class GlmPackageWeights(GlmWeightAccess):
                 ErrorCode.INVALID_PACKAGE,
                 "AMS required features do not match the tensor encodings",
             )
-        return cls(architecture, tensors, linear_arena_bytes=linear_arena_bytes)
+        return cls(
+            architecture,
+            tensors,
+            package_id=package_id,
+            manifest_content_root=manifest["content_root"],
+            linear_arena_bytes=linear_arena_bytes,
+        )
+
+    def native_glm4_binding_plan(
+        self,
+        *,
+        context_capacity_tokens: int,
+        tokenizer_vocabulary_size: int,
+        eos_token_ids: Sequence[int],
+        cache_key_dtype: DType = DType.BFLOAT16,
+        cache_value_dtype: DType = DType.BFLOAT16,
+    ) -> Glm4NativeBindingPlan:
+        """Normalize this package into a deterministic, zero-weight-I/O native handoff."""
+        architecture = self.architecture
+        if not isinstance(architecture, Glm4MoeLiteArchitecture):
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "native GLM-4 binding requires a GLM-4-MoE-Lite package",
+            )
+        if (
+            isinstance(context_capacity_tokens, bool)
+            or not isinstance(context_capacity_tokens, int)
+            or not 1 <= context_capacity_tokens <= architecture.max_position_embeddings
+        ):
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "native GLM-4 context capacity is outside the model limit",
+            )
+        if (
+            isinstance(tokenizer_vocabulary_size, bool)
+            or not isinstance(tokenizer_vocabulary_size, int)
+            or not 1 <= tokenizer_vocabulary_size <= architecture.vocab_size
+        ):
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "native GLM-4 tokenizer vocabulary is outside the model vocabulary",
+            )
+        if isinstance(eos_token_ids, str | bytes) or not isinstance(eos_token_ids, Sequence):
+            raise AmsError(ErrorCode.PLAN_INVALID, "native GLM-4 EOS policy is invalid")
+        normalized_eos = tuple(eos_token_ids)
+        if (
+            not normalized_eos
+            or any(
+                isinstance(token_id, bool)
+                or not isinstance(token_id, int)
+                or not 0 <= token_id < tokenizer_vocabulary_size
+                for token_id in normalized_eos
+            )
+            or len(set(normalized_eos)) != len(normalized_eos)
+        ):
+            raise AmsError(ErrorCode.PLAN_INVALID, "native GLM-4 EOS policy is invalid")
+        normalized_eos = tuple(sorted(normalized_eos))
+
+        try:
+            key_dtype = DType(cache_key_dtype)
+            value_dtype = DType(cache_value_dtype)
+        except (TypeError, ValueError) as exc:
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "native GLM-4 cache dtype is unsupported",
+            ) from exc
+        admitted_cache_dtypes = {DType.BFLOAT16, DType.FLOAT32}
+        if key_dtype not in admitted_cache_dtypes or value_dtype not in admitted_cache_dtypes:
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "native GLM-4 cache dtype is unsupported",
+            )
+
+        key_row_elements = checked_mul(
+            architecture.num_attention_heads,
+            architecture.qk_head_dim,
+            name="native_glm4.cache_key_row_elements",
+        )
+        value_row_elements = checked_mul(
+            architecture.num_attention_heads,
+            architecture.v_head_dim,
+            name="native_glm4.cache_value_row_elements",
+        )
+        key_row_bytes = checked_mul(
+            key_row_elements,
+            _ITEM_BYTES[key_dtype],
+            name="native_glm4.cache_key_row_bytes",
+        )
+        value_row_bytes = checked_mul(
+            value_row_elements,
+            _ITEM_BYTES[value_dtype],
+            name="native_glm4.cache_value_row_bytes",
+        )
+        cache_staging_bytes = checked_add(
+            key_row_bytes,
+            value_row_bytes,
+            name="native_glm4.cache_staging_bytes",
+        )
+        cache_storage_bytes_per_layer = checked_mul(
+            context_capacity_tokens,
+            cache_staging_bytes,
+            name="native_glm4.cache_storage_bytes_per_layer",
+        )
+        cache_storage_bytes_total = checked_mul(
+            architecture.num_hidden_layers,
+            cache_storage_bytes_per_layer,
+            name="native_glm4.cache_storage_bytes_total",
+        )
+
+        slots = expected_glm4_moe_lite_tensor_slots(architecture)
+        identity_only_roles = {
+            Glm4MoeLiteTensorRole.EMBEDDING,
+            Glm4MoeLiteTensorRole.FINAL_NORM,
+            Glm4MoeLiteTensorRole.INPUT_NORM,
+            Glm4MoeLiteTensorRole.POST_ATTENTION_NORM,
+            Glm4MoeLiteTensorRole.ATTENTION_Q_A_NORM,
+            Glm4MoeLiteTensorRole.ATTENTION_KV_A_NORM,
+            Glm4MoeLiteTensorRole.ROUTER_CORRECTION_BIAS,
+        }
+        if any(
+            not slot.mtp
+            and slot.role in identity_only_roles
+            and self._tensors[slot.tensor_name].encoding != "identity"
+            for slot in slots
+        ):
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "native GLM-4 vector and embedding bindings require identity storage",
+            )
+        referenced_readers = {
+            tensor.reader.reader.descriptor.object_id: tensor.reader
+            for tensor in self._tensors.values()
+        }
+        object_ids = tuple(sorted(referenced_readers))
+        storage_indices = {object_id: index for index, object_id in enumerate(object_ids)}
+        storage_objects = tuple(
+            Glm4NativeStorageBinding(
+                object_id=object_id,
+                absolute_path=str(referenced_readers[object_id].reader.path),
+                size_bytes=referenced_readers[object_id].reader.descriptor.size_bytes,
+                alignment_bytes=referenced_readers[object_id].reader.descriptor.alignment_bytes,
+                content_hash=referenced_readers[object_id].reader.descriptor.content_hash,
+                kind=referenced_readers[object_id].reader.descriptor.kind,
+            )
+            for object_id in object_ids
+        )
+        tensor_bindings: list[Glm4NativeTensorBinding] = []
+        for slot in slots:
+            tensor = self._tensors[slot.tensor_name]
+            descriptor = tensor.reader.reader.descriptor
+            codec = tensor.ternary_config or tensor.int4_config
+            tensor_bindings.append(
+                Glm4NativeTensorBinding(
+                    tensor_name=slot.tensor_name,
+                    role=slot.role,
+                    layer_index=slot.layer_index,
+                    expert_index=slot.expert_index,
+                    mtp=slot.mtp,
+                    shape=tensor.shape,
+                    logical_dtype=tensor.logical_dtype,
+                    encoding=tensor.encoding,
+                    storage_index=storage_indices[descriptor.object_id],
+                    offset=tensor.offset,
+                    encoded_bytes=tensor.encoded_bytes,
+                    decoded_bytes=tensor.decoded_bytes,
+                    codec_group_size=codec.group_size if codec is not None else None,
+                    codec_config_hash=codec.config_hash if codec is not None else None,
+                )
+            )
+        tensors = tuple(tensor_bindings)
+        identity_payload = {
+            "schema_id": "ams.native.glm4-binding.v1",
+            "package_id": self._package_id,
+            "manifest_content_root": self._manifest_content_root,
+            "architecture": architecture,
+            "storage_objects": [
+                {
+                    "object_id": binding.object_id,
+                    "size_bytes": binding.size_bytes,
+                    "alignment_bytes": binding.alignment_bytes,
+                    "content_hash": binding.content_hash,
+                    "kind": binding.kind,
+                }
+                for binding in storage_objects
+            ],
+            "tensors": [
+                {
+                    "tensor_name": binding.tensor_name,
+                    "role": binding.role,
+                    "layer_index": binding.layer_index,
+                    "expert_index": binding.expert_index,
+                    "mtp": binding.mtp,
+                    "shape": binding.shape,
+                    "logical_dtype": binding.logical_dtype,
+                    "encoding": binding.encoding,
+                    "storage_object_id": storage_objects[binding.storage_index].object_id,
+                    "offset": binding.offset,
+                    "encoded_bytes": binding.encoded_bytes,
+                    "decoded_bytes": binding.decoded_bytes,
+                    "codec_group_size": binding.codec_group_size,
+                    "codec_config_hash": binding.codec_config_hash,
+                }
+                for binding in tensors
+            ],
+            "linear_arena_bytes": self._linear_arena_bytes,
+            "context_capacity_tokens": context_capacity_tokens,
+            "cache_key_dtype": key_dtype,
+            "cache_value_dtype": value_dtype,
+            "cache_storage_bytes_per_layer": cache_storage_bytes_per_layer,
+            "cache_storage_bytes_total": cache_storage_bytes_total,
+            "cache_staging_bytes_per_layer": cache_staging_bytes,
+            "tokenizer_vocabulary_size": tokenizer_vocabulary_size,
+            "eos_token_ids": normalized_eos,
+        }
+        binding_hash = (
+            "sha256:" + hashlib.sha256(canonical_json_bytes(identity_payload)).hexdigest()
+        )
+        return Glm4NativeBindingPlan(
+            schema_id="ams.native.glm4-binding.v1",
+            binding_hash=binding_hash,
+            package_id=self._package_id,
+            manifest_content_root=self._manifest_content_root,
+            architecture=architecture,
+            storage_objects=storage_objects,
+            tensors=tensors,
+            linear_arena_bytes=self._linear_arena_bytes,
+            context_capacity_tokens=context_capacity_tokens,
+            cache_key_dtype=key_dtype,
+            cache_value_dtype=value_dtype,
+            cache_storage_bytes_per_layer=cache_storage_bytes_per_layer,
+            cache_storage_bytes_total=cache_storage_bytes_total,
+            cache_staging_bytes_per_layer=cache_staging_bytes,
+            tokenizer_vocabulary_size=tokenizer_vocabulary_size,
+            eos_token_ids=normalized_eos,
+        )
 
     def _tensor(self, tensor_name: str) -> _PackageTensor:
         try:

@@ -22,7 +22,13 @@ from ams.ops.glm_moe_dsa_model import (
     run_glm4_moe_lite_prefill_reference,
     run_glm_moe_dsa_prefill_reference,
 )
-from ams.ops.glm_package_weights import GlmPackageReadEvidence, GlmPackageWeights
+from ams.ops.glm_package_weights import (
+    Glm4NativeBindingPlan,
+    Glm4NativeStorageBinding,
+    Glm4NativeTensorBinding,
+    GlmPackageReadEvidence,
+    GlmPackageWeights,
+)
 from ams.ops.reference import (
     Int4StreamedLinearPlan,
     StreamedLinearPlan,
@@ -34,6 +40,9 @@ from ams.ops.reference import (
 )
 
 __all__ = [
+    "Glm4NativeBindingPlan",
+    "Glm4NativeStorageBinding",
+    "Glm4NativeTensorBinding",
     "Glm4ReferenceLayerTrace",
     "Glm4ReferenceOutput",
     "GlmExpertRouting",

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import struct
 from collections.abc import Sequence
 from io import BytesIO
@@ -375,7 +376,11 @@ def encoded_reference_tensor(
     return GlmReferenceTensor(tensor.shape, tuple(decoded))
 
 
-def build_mini_glm4_package(tmp_path: Path):
+def build_mini_glm4_package(
+    tmp_path: Path,
+    *,
+    additional_ternary_names: Sequence[str] = (),
+):
     architecture = tiny_glm4_architecture()
     tensors = {
         name: stored_f32_tensor(tensor)
@@ -424,6 +429,7 @@ def build_mini_glm4_package(tmp_path: Path):
         f"model.layers.1.mlp.experts.0.{projection}_proj.weight"
         for projection in ("gate", "up", "down")
     }
+    ternary_names.update(additional_ternary_names)
     int4_names = {
         "model.layers.0.self_attn.q_b_proj.weight",
         "model.layers.0.self_attn.o_proj.weight",
@@ -586,3 +592,131 @@ def test_mini_glm4_package_rejects_a_transposed_tensor_shape(tmp_path: Path) -> 
     with pytest.raises(AmsError) as caught:
         GlmPackageWeights.open(package_root, linear_arena_bytes=64)
     assert caught.value.code is ErrorCode.CAPABILITY_MISMATCH
+
+
+def test_mini_glm4_native_binding_is_deterministic_bounded_and_read_free(
+    tmp_path: Path,
+) -> None:
+    package_root, architecture, _ = build_mini_glm4_package(tmp_path)
+    package_weights = GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    before = package_weights.read_evidence
+    plan = package_weights.native_glm4_binding_plan(
+        context_capacity_tokens=8,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(7, 6),
+    )
+    assert package_weights.read_evidence == before
+    assert before == type(before)(0, 0, 0, 0)
+    assert plan.schema_id == "ams.native.glm4-binding.v1"
+    assert plan.binding_hash.startswith("sha256:")
+    assert plan.eos_token_ids == (6, 7)
+    assert plan.cache_staging_bytes_per_layer == 12
+    assert plan.cache_storage_bytes_per_layer == 96
+    assert plan.cache_storage_bytes_total == 192
+    assert plan.encoding_counts == (
+        ("identity", len(plan.tensors) - 5),
+        ("int4_symmetric", 2),
+        ("ternary_trit5", 3),
+    )
+    assert plan.executable_tensor_count == sum(
+        not slot.mtp for slot in expected_glm4_moe_lite_tensor_slots(architecture)
+    )
+    assert plan.mtp_tensor_count == sum(
+        slot.mtp for slot in expected_glm4_moe_lite_tensor_slots(architecture)
+    )
+    assert tuple(tensor.tensor_name for tensor in plan.tensors) == tuple(
+        sorted(tensor.tensor_name for tensor in plan.tensors)
+    )
+    assert all(Path(binding.absolute_path).is_absolute() for binding in plan.storage_objects)
+    assert all(binding.kind == "tensor_data" for binding in plan.storage_objects)
+
+    relocated_root = tmp_path / "relocated-package"
+    shutil.copytree(package_root, relocated_root)
+    relocated = GlmPackageWeights.open(relocated_root, linear_arena_bytes=64)
+    relocated_plan = relocated.native_glm4_binding_plan(
+        context_capacity_tokens=8,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(6, 7),
+    )
+    assert relocated_plan.binding_hash == plan.binding_hash
+    assert tuple(binding.absolute_path for binding in relocated_plan.storage_objects) != tuple(
+        binding.absolute_path for binding in plan.storage_objects
+    )
+    assert relocated.read_evidence == before
+    shorter_plan = relocated.native_glm4_binding_plan(
+        context_capacity_tokens=7,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(6, 7),
+    )
+    assert shorter_plan.binding_hash != plan.binding_hash
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code"),
+    (
+        ({"context_capacity_tokens": 0}, ErrorCode.PLAN_INVALID),
+        ({"context_capacity_tokens": 17}, ErrorCode.PLAN_INVALID),
+        ({"tokenizer_vocabulary_size": 9}, ErrorCode.PLAN_INVALID),
+        ({"eos_token_ids": ()}, ErrorCode.PLAN_INVALID),
+        ({"eos_token_ids": (7, 7)}, ErrorCode.PLAN_INVALID),
+        ({"eos_token_ids": (8,)}, ErrorCode.PLAN_INVALID),
+        ({"cache_key_dtype": DType.FLOAT16}, ErrorCode.CAPABILITY_MISMATCH),
+        ({"cache_value_dtype": DType.INT8}, ErrorCode.CAPABILITY_MISMATCH),
+    ),
+)
+def test_mini_glm4_native_binding_rejects_invalid_runtime_policy(
+    tmp_path: Path,
+    overrides,
+    expected_code: ErrorCode,
+) -> None:
+    package_root, _, _ = build_mini_glm4_package(tmp_path)
+    package_weights = GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    arguments = {
+        "context_capacity_tokens": 8,
+        "tokenizer_vocabulary_size": 8,
+        "eos_token_ids": (7,),
+        **overrides,
+    }
+    with pytest.raises(AmsError) as caught:
+        package_weights.native_glm4_binding_plan(**arguments)
+    assert caught.value.code is expected_code
+    assert package_weights.read_evidence == type(package_weights.read_evidence)(0, 0, 0, 0)
+
+
+def test_mini_glm4_native_binding_rejects_a_low_bit_runtime_vector(
+    tmp_path: Path,
+) -> None:
+    package_root, _, _ = build_mini_glm4_package(
+        tmp_path,
+        additional_ternary_names=("model.layers.0.input_layernorm.weight",),
+    )
+    package_weights = GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    with pytest.raises(AmsError) as caught:
+        package_weights.native_glm4_binding_plan(
+            context_capacity_tokens=8,
+            tokenizer_vocabulary_size=8,
+            eos_token_ids=(7,),
+        )
+    assert caught.value.code is ErrorCode.CAPABILITY_MISMATCH
+    assert package_weights.read_evidence == type(package_weights.read_evidence)(0, 0, 0, 0)
+
+
+def test_mini_glm4_package_rejects_tensor_ranges_over_non_tensor_objects(
+    tmp_path: Path,
+) -> None:
+    package_root, _, _ = build_mini_glm4_package(tmp_path)
+    manifest_path = package_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    object_id = manifest["tensors"][0]["layouts"][0]["chunks"][0]["range"]["object_id"]
+    target = next(
+        storage_object
+        for storage_object in manifest["storage_objects"]
+        if storage_object["object_id"] == object_id
+    )
+    target["kind"] = "graph"
+    del manifest["content_root"]
+    manifest["content_root"] = digest(canonical_json_bytes(manifest))
+    manifest_path.write_bytes(canonical_json_bytes(manifest))
+    with pytest.raises(AmsError) as caught:
+        GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    assert caught.value.code is ErrorCode.INVALID_PACKAGE

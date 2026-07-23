@@ -104,6 +104,13 @@ the LM head for every non-final prompt token, validates every layer prefix again
 ordered prefill/token/terminal steps, and leaves both caches and session retryable after cancellation
 or model failure. Cancellation is currently observed between tokens; package binding, non-greedy
 sampling, and sub-token cooperative polling remain required.
+An immutable package-to-native GLM-4 binding descriptor now closes the control-plane half of package
+binding. It orders the exact tensor inventory, maps every range to a deduplicated immutable object,
+carries dtype/codec/layer/expert/MTP metadata, admits only native-compatible identity vectors, and
+hashes package plus runtime policy without hashing machine-local paths. Context, tokenizer, EOS,
+BF16/FP32 cache, linear-arena, and exact per-layer/total KV byte limits are explicit. Descriptor
+construction reads no tensor payload; a native reader registry that verifies each declared object
+hash and constructs the Rust plans is still required before this becomes model-backed serving.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds
