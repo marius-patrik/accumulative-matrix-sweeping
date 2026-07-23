@@ -88,8 +88,9 @@ first weight read and publishes neither the staged K/V row nor caller output whe
 A separate scalar GLM-4-MoE-Lite oracle executes embeddings, full causal attention, the dense/sparse
 layer schedule, final normalization, and LM head from the same mixed package boundary used by the
 GLM-5 fixture. Its architecture field selects one exact parser and inventory; that inventory contains
-9,703 names for the pinned GLM-4.7 model. The tiny fixture proves mixed identity/ternary/INT4 execution
-and leaves MTP explicitly unsupported.
+9,703 names for the pinned GLM-4.7 model. Package admission also derives and checks the exact row-major
+shape for every role, so a transposed matrix with the same element count fails before any payload read.
+The tiny fixture proves mixed identity/ternary/INT4 execution and leaves MTP explicitly unsupported.
 The native decoder-stack transaction preflights the dense layer and every sparse layer before its
 first read, reuses one working set per layer class, and treats all per-layer KV prefixes as one commit:
 a later expert failure rolls earlier layer prefixes back so the same token can be retried safely.

@@ -17,6 +17,7 @@ from ams.descriptors import DType, StorageObject, validate_digest, validate_iden
 from ams.errors import AmsError, ErrorCode
 from ams.integrations.glm4_moe_lite import (
     Glm4MoeLiteArchitecture,
+    expected_glm4_moe_lite_tensor_shape,
     expected_glm4_moe_lite_tensor_slots,
     parse_glm4_moe_lite_architecture,
 )
@@ -537,14 +538,16 @@ class GlmPackageWeights(GlmWeightAccess):
         )
         _dtype(model["default_dtype"], name="model default dtype")
         configuration_payload = canonical_json_bytes(model["configuration"])
+        expected_glm4_slots = None
         if model["architecture"] == "GlmMoeDsaForCausalLM":
             architecture = parse_glm_moe_dsa_architecture(configuration_payload)
             expected_names = {slot.tensor_name for slot in expected_glm_tensor_slots(architecture)}
         elif model["architecture"] == "Glm4MoeLiteForCausalLM":
             architecture = parse_glm4_moe_lite_architecture(configuration_payload)
-            expected_names = {
-                slot.tensor_name for slot in expected_glm4_moe_lite_tensor_slots(architecture)
+            expected_glm4_slots = {
+                slot.tensor_name: slot for slot in expected_glm4_moe_lite_tensor_slots(architecture)
             }
+            expected_names = set(expected_glm4_slots)
         else:
             raise AmsError(
                 ErrorCode.CAPABILITY_MISMATCH,
@@ -565,6 +568,16 @@ class GlmPackageWeights(GlmWeightAccess):
                 raise AmsError(
                     ErrorCode.INVALID_PACKAGE, "tensor IDs or source names are duplicated"
                 )
+            if expected_glm4_slots is not None and parsed.source_name in expected_glm4_slots:
+                expected_shape = expected_glm4_moe_lite_tensor_shape(
+                    architecture,
+                    expected_glm4_slots[parsed.source_name],
+                )
+                if parsed.shape != expected_shape:
+                    raise AmsError(
+                        ErrorCode.CAPABILITY_MISMATCH,
+                        "GLM-4 package tensor shape differs from the reviewed graph",
+                    )
             tensors[parsed.source_name] = parsed
             tensor_ids.add(tensor_id)
         if set(tensors) != expected_names:

@@ -141,6 +141,8 @@ The reconstruction branch currently contains:
   inference layers, and a separately marked 212-tensor MTP layer, including its private embedding and
   shared head. The 48-shard provider mapping declares 31,221,488,576 as `total_size`; the pinned name
   set has SHA-256 `23321d795f0b797ab951613b86cf4d02008e4057b446055fcc2b0265b1f3db3d`.
+  Mixed-package admission derives the exact row-major shape of every role from the normalized
+  architecture and rejects shape drift, including same-element-count transposition, before weight I/O.
 - a credential-free, bounded HTTPS range reader that accepts only exact `206` responses with identity
   encoding and matching length/range/object-size metadata. Redirect, status, size, and encoding drift
   fail closed; transport retries are explicitly classified and capped. It was live-probed against an
@@ -318,7 +320,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 185 Python tests, and runs 55 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 187 Python tests, and runs 55 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

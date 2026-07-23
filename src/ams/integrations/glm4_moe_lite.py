@@ -308,6 +308,85 @@ class Glm4MoeLiteTensorInventory:
     slots: tuple[Glm4MoeLiteTensorSlot, ...]
 
 
+def expected_glm4_moe_lite_tensor_shape(
+    architecture: Glm4MoeLiteArchitecture,
+    slot: Glm4MoeLiteTensorSlot,
+) -> tuple[int, ...]:
+    """Return the sole reviewed row-major shape for one GLM-4 tensor slot."""
+
+    role = slot.role
+    hidden = architecture.hidden_size
+    shared_intermediate = architecture.moe_intermediate_size * architecture.n_shared_experts
+    if role in {
+        Glm4MoeLiteTensorRole.EMBEDDING,
+        Glm4MoeLiteTensorRole.LM_HEAD,
+        Glm4MoeLiteTensorRole.MTP_EMBEDDING,
+        Glm4MoeLiteTensorRole.MTP_SHARED_HEAD,
+    }:
+        return (architecture.vocab_size, hidden)
+    if role in {
+        Glm4MoeLiteTensorRole.FINAL_NORM,
+        Glm4MoeLiteTensorRole.INPUT_NORM,
+        Glm4MoeLiteTensorRole.POST_ATTENTION_NORM,
+        Glm4MoeLiteTensorRole.MTP_EMBED_NORM,
+        Glm4MoeLiteTensorRole.MTP_HIDDEN_NORM,
+        Glm4MoeLiteTensorRole.MTP_SHARED_HEAD_NORM,
+    }:
+        return (hidden,)
+    if role is Glm4MoeLiteTensorRole.ATTENTION_Q_A_PROJECTION:
+        return (architecture.q_lora_rank, hidden)
+    if role is Glm4MoeLiteTensorRole.ATTENTION_Q_A_NORM:
+        return (architecture.q_lora_rank,)
+    if role is Glm4MoeLiteTensorRole.ATTENTION_Q_B_PROJECTION:
+        return (
+            architecture.num_attention_heads * architecture.qk_head_dim,
+            architecture.q_lora_rank,
+        )
+    if role is Glm4MoeLiteTensorRole.ATTENTION_KV_A_PROJECTION:
+        return (architecture.kv_lora_rank + architecture.qk_rope_head_dim, hidden)
+    if role is Glm4MoeLiteTensorRole.ATTENTION_KV_A_NORM:
+        return (architecture.kv_lora_rank,)
+    if role is Glm4MoeLiteTensorRole.ATTENTION_KV_B_PROJECTION:
+        return (
+            architecture.num_attention_heads
+            * (architecture.qk_nope_head_dim + architecture.v_head_dim),
+            architecture.kv_lora_rank,
+        )
+    if role is Glm4MoeLiteTensorRole.ATTENTION_OUTPUT_PROJECTION:
+        return (hidden, architecture.num_attention_heads * architecture.v_head_dim)
+    if role in {
+        Glm4MoeLiteTensorRole.DENSE_GATE_PROJECTION,
+        Glm4MoeLiteTensorRole.DENSE_UP_PROJECTION,
+    }:
+        return (architecture.intermediate_size, hidden)
+    if role is Glm4MoeLiteTensorRole.DENSE_DOWN_PROJECTION:
+        return (hidden, architecture.intermediate_size)
+    if role is Glm4MoeLiteTensorRole.ROUTER_WEIGHT:
+        return (architecture.n_routed_experts, hidden)
+    if role is Glm4MoeLiteTensorRole.ROUTER_CORRECTION_BIAS:
+        return (architecture.n_routed_experts,)
+    if role in {
+        Glm4MoeLiteTensorRole.ROUTED_EXPERT_GATE_PROJECTION,
+        Glm4MoeLiteTensorRole.ROUTED_EXPERT_UP_PROJECTION,
+    }:
+        return (architecture.moe_intermediate_size, hidden)
+    if role is Glm4MoeLiteTensorRole.ROUTED_EXPERT_DOWN_PROJECTION:
+        return (hidden, architecture.moe_intermediate_size)
+    if role in {
+        Glm4MoeLiteTensorRole.SHARED_EXPERT_GATE_PROJECTION,
+        Glm4MoeLiteTensorRole.SHARED_EXPERT_UP_PROJECTION,
+    }:
+        return (shared_intermediate, hidden)
+    if role is Glm4MoeLiteTensorRole.SHARED_EXPERT_DOWN_PROJECTION:
+        return (hidden, shared_intermediate)
+    if role is Glm4MoeLiteTensorRole.MTP_EMBED_HIDDEN_PROJECTION:
+        return (hidden, hidden * 2)
+    raise AmsError(
+        ErrorCode.INTERNAL_INVARIANT,
+        "GLM-4 tensor role has no reviewed shape",
+    )
+
+
 def _add_layer_slots(
     slots: dict[str, Glm4MoeLiteTensorSlot],
     architecture: Glm4MoeLiteArchitecture,

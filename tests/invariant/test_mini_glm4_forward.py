@@ -26,6 +26,7 @@ from ams.integrations import (
     HuggingFaceTensorEncoding,
     build_huggingface_catalog,
     build_huggingface_mixed_plan,
+    expected_glm4_moe_lite_tensor_shape,
     expected_glm4_moe_lite_tensor_slots,
     parse_glm4_moe_lite_architecture,
     parse_huggingface_shard_index,
@@ -504,6 +505,16 @@ def test_mini_glm4_prefill_executes_full_attention_dense_and_sparse_layers() -> 
     )
 
 
+def test_mini_glm4_fixture_matches_every_reviewed_tensor_shape() -> None:
+    architecture = tiny_glm4_architecture()
+    tensors = glm4_fixture_tensor_map(architecture)
+    for slot in expected_glm4_moe_lite_tensor_slots(architecture):
+        assert tensors[slot.tensor_name].shape == expected_glm4_moe_lite_tensor_shape(
+            architecture,
+            slot,
+        )
+
+
 def test_mini_glm4_mtp_is_explicitly_unsupported() -> None:
     architecture = tiny_glm4_architecture()
     with pytest.raises(AmsError) as caught:
@@ -552,3 +563,26 @@ def test_mini_glm4_package_architecture_field_is_authoritative(tmp_path: Path) -
     with pytest.raises(AmsError) as caught:
         GlmPackageWeights.open(package_root, linear_arena_bytes=64)
     assert caught.value.code is ErrorCode.INVALID_PACKAGE
+
+
+def test_mini_glm4_package_rejects_a_transposed_tensor_shape(tmp_path: Path) -> None:
+    package_root, _, _ = build_mini_glm4_package(tmp_path)
+    manifest_path = package_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    target_name = "model.layers.0.self_attn.q_a_proj.weight"
+    target = next(
+        tensor
+        for tensor in manifest["tensors"]
+        if tensor["extensions"]["hf.source-name"] == target_name
+    )
+    transposed = list(reversed(target["shape"]))
+    assert transposed != target["shape"]
+    target["shape"] = transposed
+    target["layouts"][0]["tile_shape"] = transposed
+    target["layouts"][0]["chunks"][0]["logical_extent"] = transposed
+    del manifest["content_root"]
+    manifest["content_root"] = digest(canonical_json_bytes(manifest))
+    manifest_path.write_bytes(canonical_json_bytes(manifest))
+    with pytest.raises(AmsError) as caught:
+        GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    assert caught.value.code is ErrorCode.CAPABILITY_MISMATCH
