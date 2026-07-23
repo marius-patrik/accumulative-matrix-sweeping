@@ -266,8 +266,16 @@ The reconstruction branch currently contains:
   before the embedding reader is touched, rolls both layer caches back when a non-finite LM-head value
   fails after decoder execution, and retries successfully. The plan separately admits full model rows
   and tokenizer-mapped IDs; its deliberately highest unmapped logit cannot be selected or accepted as
-  input. The wrapper is manually bound; package plan construction, autoregressive generation, and
-  sampling remain open.
+  input. The wrapper is manually bound; package plan construction and non-greedy sampling remain open.
+- an allocation-free native greedy generation session that borrows one immutable prompt and EOS set,
+  preflights the prompt plus worst-case generated-input prefix against the fixed KV capacity, and
+  exposes ordered prefill, token, and terminal transitions. Non-final prompt positions execute the
+  embedding and decoder without reading the LM head; the final prompt position and subsequent decode
+  positions select only tokenizer-mapped logits. Before each call, every layer prefix must equal the
+  session position. Token-boundary cancellation, injected failure, and a deliberately stale session
+  leave model I/O, session counters, and cache prefixes unchanged; a late LM-head numeric failure
+  after prefill rolls back the final decoder row and succeeds on retry. EOS is not emitted or cached,
+  while a length stop returns its final emitted token. Sub-token cooperative cancellation remains open.
 - an exact GLM-4.7 tokenizer admission and execution boundary. It hashes the complete pinned
   tokenizer/config/template triplet before parsing, rejects symlinks and semantic drift, proves the
   contiguous tokenizer range `0..154855`, and identifies model-logit IDs `154856..154879` as unmapped
@@ -310,7 +318,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 185 Python tests, and runs 51 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 185 Python tests, and runs 55 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus

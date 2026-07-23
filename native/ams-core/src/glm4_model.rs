@@ -182,6 +182,12 @@ impl Glm4ModelPlan {
     pub const fn tokenizer_vocabulary_size(&self) -> usize {
         self.tokenizer_vocabulary_size
     }
+
+    /// Maximum token prefix admitted by every decoder-layer cache.
+    #[must_use]
+    pub const fn context_capacity_tokens(&self) -> usize {
+        self.decoder.cache_capacity_tokens()
+    }
 }
 
 /// Weight readers for embedding, decoder stack, final norm, and LM head.
@@ -292,27 +298,18 @@ fn select_argmax(logits: &[f64]) -> Result<usize, AmsError> {
     })
 }
 
-/// Execute one autoregressive token and return the deterministic lowest-index argmax token.
-///
-/// The complete model is preflighted before the embedding read. Decoder caches remain committed only
-/// if final normalization, LM-head execution, and token selection also succeed.
-///
-/// # Errors
-///
-/// Returns a typed plan, capacity, storage, codec, or numeric error.
-#[allow(clippy::too_many_lines)]
-pub fn glm4_model_next_token(
+fn preflight_model_token(
     plan: &Glm4ModelPlan,
     readers: &Glm4ModelReaders<'_, '_, '_>,
-    caches: &mut [KvCache<'_>],
+    caches: &[KvCache<'_>],
     position: usize,
     input_token: usize,
-    scratch: &mut Glm4ModelScratch<'_>,
-) -> Result<usize, AmsError> {
+    scratch: &Glm4ModelScratch<'_>,
+) -> Result<(), AmsError> {
     if input_token >= plan.tokenizer_vocabulary_size {
         return Err(AmsError::new(
             ErrorCode::PlanInvalid,
-            "GLM-4 model input token is outside the vocabulary",
+            "GLM-4 model input token is outside the tokenizer vocabulary",
         ));
     }
     if !scratch.admits(plan) {
@@ -336,8 +333,17 @@ pub fn glm4_model_next_token(
         position,
         &scratch.dense,
         &scratch.sparse,
-    )?;
+    )
+}
 
+fn execute_model_decoder_token(
+    plan: &Glm4ModelPlan,
+    readers: &Glm4ModelReaders<'_, '_, '_>,
+    caches: &mut [KvCache<'_>],
+    position: usize,
+    input_token: usize,
+    scratch: &mut Glm4ModelScratch<'_>,
+) -> Result<(), AmsError> {
     let hidden = plan.scratch.hidden_elements;
     let row_bytes = mul(
         hidden,
@@ -364,7 +370,6 @@ pub fn glm4_model_next_token(
         input_hidden,
         scratch.vector_encoded,
     )?;
-    let decoder_output = &mut scratch.decoder_output[..hidden];
     glm4_decoder_token(
         &plan.decoder,
         &readers.decoder,
@@ -375,9 +380,51 @@ pub fn glm4_model_next_token(
         &mut scratch.sparse,
         &mut scratch.hidden_a[..hidden],
         &mut scratch.hidden_b[..hidden],
-        decoder_output,
-    )?;
+        &mut scratch.decoder_output[..hidden],
+    )
+}
 
+/// Consume one prompt token into every decoder cache without evaluating the LM head.
+///
+/// Complete embedding, decoder, final-normalization, and LM-head bindings are still preflighted
+/// before the embedding read. This makes a later next-token selection admissible without paying the
+/// full vocabulary projection for prompt positions whose logits are discarded.
+///
+/// # Errors
+///
+/// Returns a typed plan, capacity, storage, codec, or numeric error.
+pub fn glm4_model_cache_token(
+    plan: &Glm4ModelPlan,
+    readers: &Glm4ModelReaders<'_, '_, '_>,
+    caches: &mut [KvCache<'_>],
+    position: usize,
+    input_token: usize,
+    scratch: &mut Glm4ModelScratch<'_>,
+) -> Result<(), AmsError> {
+    preflight_model_token(plan, readers, caches, position, input_token, scratch)?;
+    execute_model_decoder_token(plan, readers, caches, position, input_token, scratch)
+}
+
+/// Execute one autoregressive token and return the deterministic lowest-index argmax token.
+///
+/// The complete model is preflighted before the embedding read. Decoder caches remain committed only
+/// if final normalization, LM-head execution, and token selection also succeed.
+///
+/// # Errors
+///
+/// Returns a typed plan, capacity, storage, codec, or numeric error.
+#[allow(clippy::too_many_lines)]
+pub fn glm4_model_next_token(
+    plan: &Glm4ModelPlan,
+    readers: &Glm4ModelReaders<'_, '_, '_>,
+    caches: &mut [KvCache<'_>],
+    position: usize,
+    input_token: usize,
+    scratch: &mut Glm4ModelScratch<'_>,
+) -> Result<usize, AmsError> {
+    preflight_model_token(plan, readers, caches, position, input_token, scratch)?;
+    execute_model_decoder_token(plan, readers, caches, position, input_token, scratch)?;
+    let hidden = plan.scratch.hidden_elements;
     let tail = (|| -> Result<usize, AmsError> {
         let norm_weights = &mut scratch.norm_weights[..hidden];
         read_identity_vector(
@@ -389,7 +436,7 @@ pub fn glm4_model_next_token(
         )?;
         let normalized = &mut scratch.normalized[..hidden];
         glm_rms_norm(
-            decoder_output,
+            &scratch.decoder_output[..hidden],
             norm_weights,
             plan.rms_norm_epsilon,
             normalized,

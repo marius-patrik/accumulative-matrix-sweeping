@@ -12,6 +12,7 @@ mod gated_mlp;
 mod glm;
 mod glm4_decoder;
 mod glm4_dense_layer;
+mod glm4_generation;
 mod glm4_mla;
 mod glm4_model;
 mod glm4_sparse_layer;
@@ -42,13 +43,16 @@ pub use glm4_dense_layer::{
     Glm4DenseLayerNormLayout, Glm4DenseLayerPlan, Glm4DenseLayerReaders, Glm4DenseLayerScratch,
     Glm4DenseLayerScratchRequirements, glm4_dense_layer_token,
 };
+pub use glm4_generation::{
+    Glm4FinishReason, Glm4GenerationStep, Glm4GreedySession, glm4_greedy_advance,
+};
 pub use glm4_mla::{
     Glm4MlaNormLayout, Glm4MlaPlan, Glm4MlaReaders, Glm4MlaScratch, Glm4MlaScratchRequirements,
     glm4_mla_project,
 };
 pub use glm4_model::{
     Glm4ModelPlan, Glm4ModelReaders, Glm4ModelScratch, Glm4ModelScratchRequirements,
-    Glm4ModelVectorLayout, glm4_model_next_token,
+    Glm4ModelVectorLayout, glm4_model_cache_token, glm4_model_next_token,
 };
 pub use glm4_sparse_layer::{
     Glm4SparseLayerPlan, Glm4SparseLayerReaders, Glm4SparseLayerScratch,

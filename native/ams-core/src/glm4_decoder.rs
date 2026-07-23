@@ -60,6 +60,12 @@ impl Glm4DecoderPlan {
         self.hidden_elements
     }
 
+    /// Fixed token capacity shared by every layer cache.
+    #[must_use]
+    pub const fn cache_capacity_tokens(&self) -> usize {
+        self.dense.cache_plan().capacity_tokens()
+    }
+
     /// Exact working set for the sole dense layer.
     #[must_use]
     pub const fn dense_scratch(&self) -> Glm4DenseLayerScratchRequirements {
@@ -251,11 +257,12 @@ mod tests {
     use super::*;
     use crate::{
         FullAttentionScratch, GatedMlpPlan, GatedMlpReaders, GatedMlpScratch,
-        Glm4DenseLayerNormLayout, Glm4MlaNormLayout, Glm4MlaPlan, Glm4MlaReaders, Glm4MlaScratch,
-        Glm4ModelPlan, Glm4ModelReaders, Glm4ModelScratch, Glm4ModelVectorLayout,
-        Glm4SparseLayerVectorLayout, GlmRouterPlan, GlmRouterScratch, IdentityDType,
-        IdentityLinearPlan, KvCachePlan, LinearPlan, LinearScratch, RangeReader, SliceReader,
-        SparseMoeBindings, SparseMoePlan, SparseMoeScratch, glm4_model_next_token,
+        Glm4DenseLayerNormLayout, Glm4FinishReason, Glm4GenerationStep, Glm4GreedySession,
+        Glm4MlaNormLayout, Glm4MlaPlan, Glm4MlaReaders, Glm4MlaScratch, Glm4ModelPlan,
+        Glm4ModelReaders, Glm4ModelScratch, Glm4ModelVectorLayout, Glm4SparseLayerVectorLayout,
+        GlmRouterPlan, GlmRouterScratch, IdentityDType, IdentityLinearPlan, KvCachePlan,
+        LinearPlan, LinearScratch, RangeReader, SliceReader, SparseMoeBindings, SparseMoePlan,
+        SparseMoeScratch, glm4_greedy_advance, glm4_model_next_token,
     };
 
     struct CountingReader {
@@ -608,13 +615,7 @@ mod tests {
         })
     }
 
-    fn run_model_fixture(
-        plan: &Glm4ModelPlan,
-        readers: &Glm4ModelReaders<'_, '_, '_>,
-        caches: &mut [KvCache<'_>; 2],
-        position: usize,
-        input_token: usize,
-    ) -> Result<usize, AmsError> {
+    fn with_model_scratch<T>(operation: impl FnOnce(&mut Glm4ModelScratch<'_>) -> T) -> T {
         with_layer_scratch(|dense_scratch, sparse_scratch| {
             let mut vector_encoded = [0u8; 8];
             let mut lm_encoded = [0u8; 16];
@@ -642,7 +643,31 @@ mod tests {
                 &mut normalized,
                 &mut logits,
             );
-            glm4_model_next_token(plan, readers, caches, position, input_token, &mut scratch)
+            operation(&mut scratch)
+        })
+    }
+
+    fn run_model_fixture(
+        plan: &Glm4ModelPlan,
+        readers: &Glm4ModelReaders<'_, '_, '_>,
+        caches: &mut [KvCache<'_>; 2],
+        position: usize,
+        input_token: usize,
+    ) -> Result<usize, AmsError> {
+        with_model_scratch(|scratch| {
+            glm4_model_next_token(plan, readers, caches, position, input_token, scratch)
+        })
+    }
+
+    fn advance_generation_fixture(
+        plan: &Glm4ModelPlan,
+        readers: &Glm4ModelReaders<'_, '_, '_>,
+        caches: &mut [KvCache<'_>; 2],
+        session: &mut Glm4GreedySession<'_>,
+        cancelled: bool,
+    ) -> Result<Glm4GenerationStep, AmsError> {
+        with_model_scratch(|scratch| {
+            glm4_greedy_advance(plan, readers, caches, session, scratch, cancelled)
         })
     }
 
@@ -845,12 +870,13 @@ mod tests {
         // The unmapped third row scores above the second row and must not be selected.
         let lm_head = encode_f32(&[0.0, 0.0, 1.0, 0.0, 1.0, -1.0]);
         let bad_lm_head = encode_f32(&[f32::NAN, 0.0, 1.0, 0.0, 1.0, -1.0]);
+        let short_lm_head = lm_head[..20].to_vec();
         let norm_reader = SliceReader::new(&norm);
         let correction_reader = SliceReader::new(&correction);
         let zero_reader = SliceReader::new(&zeros);
         let embedding_reader = CountingReader::new(embeddings);
-        let lm_head_reader = SliceReader::new(&lm_head);
-        let short_lm_head_reader = SliceReader::new(&lm_head[..20]);
+        let lm_head_reader = CountingReader::new(lm_head);
+        let short_lm_head_reader = SliceReader::new(&short_lm_head);
         let bad_lm_head_reader = SliceReader::new(&bad_lm_head);
         let shared = GatedMlpReaders::new(&zero_reader, &zero_reader, &zero_reader);
         let experts = [
@@ -915,9 +941,20 @@ mod tests {
         let error = run_model_fixture(&model, &short_readers, &mut caches, 0, 2).err();
         assert_eq!(error.map(AmsError::code), Some(ErrorCode::PlanInvalid));
         assert_eq!(embedding_reader.reads.get(), 0);
-        let error = run_model_fixture(&model, &short_readers, &mut caches, 0, 1).err();
+        let prompt = [1, 1];
+        let eos = [0];
+        let mut short_session = Glm4GreedySession::new(&model, &prompt, &eos, 1)?;
+        let error = advance_generation_fixture(
+            &model,
+            &short_readers,
+            &mut caches,
+            &mut short_session,
+            false,
+        )
+        .err();
         assert_eq!(error.map(AmsError::code), Some(ErrorCode::IoFailure));
         assert_eq!(embedding_reader.reads.get(), 0);
+        assert_eq!(short_session.position(), 0);
         assert!(caches.iter().all(|cache| cache.committed_tokens() == 0));
 
         let (dense, sparse) = make_decoder_readers();
@@ -928,9 +965,38 @@ mod tests {
             &norm_reader,
             &lm_head_reader,
         );
-        let token = run_model_fixture(&model, &readers, &mut caches, 0, 1)?;
-        assert_eq!(token, 1);
+        let mut session = Glm4GreedySession::new(&model, &prompt, &eos, 1)?;
+        let error =
+            advance_generation_fixture(&model, &readers, &mut caches, &mut session, true).err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::Cancelled));
+        assert_eq!(session.position(), 0);
+        assert_eq!(embedding_reader.reads.get(), 0);
+        assert_eq!(lm_head_reader.reads.get(), 0);
+
+        let step = advance_generation_fixture(&model, &readers, &mut caches, &mut session, false)?;
+        assert_eq!(
+            step,
+            Glm4GenerationStep::Prefill {
+                consumed_tokens: 1,
+                total_tokens: 2
+            }
+        );
+        assert_eq!(lm_head_reader.reads.get(), 0);
         assert!(caches.iter().all(|cache| cache.committed_tokens() == 1));
+
+        let mut disagreeing_session = Glm4GreedySession::new(&model, &prompt, &eos, 1)?;
+        let reads_before_disagreement = embedding_reader.reads.get();
+        let error = advance_generation_fixture(
+            &model,
+            &readers,
+            &mut caches,
+            &mut disagreeing_session,
+            false,
+        )
+        .err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::PlanInvalid));
+        assert_eq!(embedding_reader.reads.get(), reads_before_disagreement);
+        assert_eq!(lm_head_reader.reads.get(), 0);
 
         let (bad_dense, bad_sparse) = make_decoder_readers();
         let bad_sparse_readers = [bad_sparse];
@@ -940,8 +1006,13 @@ mod tests {
             &norm_reader,
             &bad_lm_head_reader,
         );
-        let error = run_model_fixture(&model, &bad_readers, &mut caches, 1, 1).err();
+        let error =
+            advance_generation_fixture(&model, &bad_readers, &mut caches, &mut session, false)
+                .err();
         assert_eq!(error.map(AmsError::code), Some(ErrorCode::NumericFailure));
+        assert_eq!(session.position(), 1);
+        assert_eq!(session.prompt_consumed(), 1);
+        assert_eq!(session.generated_tokens(), 0);
         assert!(caches.iter().all(|cache| cache.committed_tokens() == 1));
 
         let (retry_dense, retry_sparse) = make_decoder_readers();
@@ -952,8 +1023,20 @@ mod tests {
             &norm_reader,
             &lm_head_reader,
         );
-        let token = run_model_fixture(&model, &retry_readers, &mut caches, 1, 1)?;
-        assert_eq!(token, 1);
+        let step =
+            advance_generation_fixture(&model, &retry_readers, &mut caches, &mut session, false)?;
+        assert_eq!(
+            step,
+            Glm4GenerationStep::Finished {
+                token_id: Some(1),
+                reason: Glm4FinishReason::Length
+            }
+        );
+        assert_eq!(session.position(), 2);
+        assert_eq!(session.generated_tokens(), 1);
+        assert_eq!(session.pending_input(), Some(1));
+        assert_eq!(session.finish_reason(), Some(Glm4FinishReason::Length));
+        assert!(lm_head_reader.reads.get() > 0);
         assert!(caches.iter().all(|cache| cache.committed_tokens() == 2));
         Ok(())
     }
