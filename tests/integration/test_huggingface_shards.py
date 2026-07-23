@@ -17,6 +17,7 @@ from ams.integrations import (
     audit_huggingface_headers,
     build_huggingface_catalog,
     build_huggingface_identity_plan,
+    build_huggingface_shard_catalog,
     parse_huggingface_shard_index,
 )
 from ams.storage import FileRangeStore
@@ -117,6 +118,41 @@ def test_sharded_index_catalog_plan_and_multi_source_conversion(tmp_path: Path) 
         published = output / "chunks" / f"{algorithm}-{hexdigest}.bin"
         assert published.is_file()
         assert digest(published.read_bytes()) == tensor.source_checksum
+
+
+def test_single_shard_catalog_retains_full_index_identity_and_exact_tensor_set(
+    tmp_path: Path,
+) -> None:
+    index_payload, sources, _ = create_sharded_fixture(tmp_path)
+    index = parse_huggingface_shard_index(index_payload)
+    shard = build_huggingface_shard_catalog(index, sources[0], buffer_bytes=7)
+
+    assert shard.index_content_hash == index.content_hash
+    assert shard.index_metadata_hash == index.metadata_hash
+    assert shard.sources == (sources[0],)
+    assert [tensor.tensor_name for tensor in shard.tensors] == [
+        "model.embed.weight",
+        "model.empty",
+    ]
+    assert shard.total_size == sum(tensor.source_length for tensor in shard.tensors)
+    assert (
+        shard.source_root
+        != build_huggingface_catalog(
+            index,
+            sources,
+            buffer_bytes=7,
+        ).source_root
+    )
+
+    wrong_identity = HuggingFaceShardSource(
+        sources[0].shard_name,
+        sources[0].object_id,
+        "sha256:" + "0" * 64,
+        sources[0].reader,
+    )
+    with pytest.raises(AmsError, match="hash mismatch") as caught:
+        build_huggingface_shard_catalog(index, wrong_identity, buffer_bytes=7)
+    assert caught.value.code is ErrorCode.INTEGRITY_FAILURE
 
 
 @pytest.mark.parametrize(

@@ -88,7 +88,9 @@ def _candidate_fixture():
     offset = 0
     for slot in slots:
         shape = expected_glm4_moe_lite_tensor_shape(architecture, slot)
-        length = 2
+        is_correction_bias = slot.role is Glm4MoeLiteTensorRole.ROUTER_CORRECTION_BIAS
+        item_bytes = 4 if is_correction_bias else 2
+        length = item_bytes
         for dimension in shape:
             length *= dimension
         tensors.append(
@@ -96,8 +98,8 @@ def _candidate_fixture():
                 tensor_name=slot.tensor_name,
                 shard_name="model-00001-of-00001.safetensors",
                 object_id="hf:model-00001-of-00001.safetensors",
-                dtype=DType.BFLOAT16,
-                source_dtype="BF16",
+                dtype=DType.FLOAT32 if is_correction_bias else DType.BFLOAT16,
+                source_dtype="F32" if is_correction_bias else "BF16",
                 shape=shape,
                 source_offset=offset,
                 source_length=length,

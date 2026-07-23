@@ -10,9 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from ams.canonical import canonical_json_bytes
-from ams.checked import checked_mul, checked_product
 from ams.codecs import Int4CodecConfig, TernaryCodecConfig
-from ams.descriptors import DType, StorageObject
+from ams.descriptors import StorageObject
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
     Glm4LowBitDiagnosticConfig,
@@ -20,10 +19,9 @@ from ams.integrations import (
     Glm4PrecisionProfile,
     Glm4QuantizationCodecVariant,
     Glm4QuantizationProbeConfig,
-    HuggingFaceCatalogTensor,
     build_experimental_glm4_precision_candidate,
     compare_glm4_quantization_variants,
-    expected_glm4_moe_lite_tensor_shape,
+    derive_expected_glm4_catalog_tensors,
     parse_glm4_moe_lite_architecture,
     parse_huggingface_shard_index,
     probe_experimental_glm4_quantization_shard,
@@ -244,42 +242,15 @@ def _run(arguments: argparse.Namespace):
     ternary_config = TernaryCodecConfig(group_size=arguments.group_size)
     int4_config = Int4CodecConfig(group_size=arguments.group_size)
 
-    entry_by_name = {entry.tensor_name: entry for entry in index.entries}
-    catalog_tensors = []
-    source_offset = 0
-    for slot in inventory.slots:
-        shape = expected_glm4_moe_lite_tensor_shape(architecture, slot)
-        if slot.role is Glm4MoeLiteTensorRole.ROUTER_CORRECTION_BIAS:
-            dtype = DType.FLOAT32
-            source_dtype = "F32"
-            item_bytes = 4
-        else:
-            dtype = DType.BFLOAT16
-            source_dtype = "BF16"
-            item_bytes = 2
-        source_length = checked_mul(
-            checked_product(shape, name="glm4_probe_cli.tensor_elements"),
-            item_bytes,
-            name="glm4_probe_cli.tensor_bytes",
-        )
-        shard_name = entry_by_name[slot.tensor_name].shard_name
-        catalog_tensors.append(
-            HuggingFaceCatalogTensor(
-                tensor_name=slot.tensor_name,
-                shard_name=shard_name,
-                object_id=f"hf:{shard_name}",
-                dtype=dtype,
-                source_dtype=source_dtype,
-                shape=shape,
-                source_offset=source_offset,
-                source_length=source_length,
-            )
-        )
-        source_offset += source_length
+    catalog_tensors = derive_expected_glm4_catalog_tensors(
+        architecture,
+        inventory,
+        index,
+    )
     candidate = build_experimental_glm4_precision_candidate(
         architecture,
         inventory,
-        tuple(catalog_tensors),
+        catalog_tensors,
         ternary_config=ternary_config,
         int4_config=int4_config,
     )

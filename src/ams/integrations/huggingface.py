@@ -579,6 +579,67 @@ def build_huggingface_catalog(
     )
 
 
+def build_huggingface_shard_catalog(
+    index: HuggingFaceShardIndex,
+    source: HuggingFaceShardSource,
+    *,
+    buffer_bytes: int = 1024 * 1024,
+) -> HuggingFaceCatalog:
+    """Authenticate and catalog one exact shard while retaining the full-index identity."""
+    expected_names = {
+        entry.tensor_name for entry in index.entries if entry.shard_name == source.shard_name
+    }
+    if source.shard_name not in index.shard_names or not expected_names:
+        raise AmsError(
+            ErrorCode.INVALID_PACKAGE,
+            "Hugging Face shard is absent from the full index",
+        )
+    header = _verify_shard(source, buffer_bytes=buffer_bytes)
+    observed_names = {tensor.source_name for tensor in header.tensors}
+    if observed_names != expected_names:
+        raise AmsError(
+            ErrorCode.INVALID_PACKAGE,
+            "Hugging Face shard header does not match its full-index tensor set",
+            evidence={
+                "missing": len(expected_names - observed_names),
+                "unexpected": len(observed_names - expected_names),
+            },
+        )
+    tensors = tuple(
+        sorted(
+            (
+                HuggingFaceCatalogTensor(
+                    tensor_name=tensor.source_name,
+                    shard_name=source.shard_name,
+                    object_id=source.object_id,
+                    dtype=tensor.dtype,
+                    source_dtype=tensor.source_dtype,
+                    shape=tensor.shape,
+                    source_offset=tensor.absolute_offset,
+                    source_length=tensor.data_length,
+                )
+                for tensor in header.tensors
+            ),
+            key=lambda tensor: tensor.tensor_name,
+        )
+    )
+    total_size = 0
+    for tensor in tensors:
+        total_size = checked_add(
+            total_size,
+            tensor.source_length,
+            name="huggingface.shard_catalog.total_size",
+        )
+    return HuggingFaceCatalog(
+        source_root=_huggingface_source_root(index, (source,)),
+        index_content_hash=index.content_hash,
+        index_metadata_hash=index.metadata_hash,
+        total_size=total_size,
+        tensors=tensors,
+        sources=(source,),
+    )
+
+
 def build_huggingface_identity_plan(
     catalog: HuggingFaceCatalog,
     configuration_hash: str,

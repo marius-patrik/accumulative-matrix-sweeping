@@ -269,6 +269,15 @@ The reconstruction branch currently contains:
   `sha256:c6af0d95cedb6b602196159cd0b420e14bda8a4612daabf42d101af07faa7e77`
   to the 62,442,983,168-byte source inventory and 17,527,623,424-byte estimate. It is an
   accuracy-first conversion profile, not quality qualification.
+- a restart-safe real-payload slice conversion under that profile.
+  `ci/convert_glm4_shard_slice.py` requires an exact candidate evidence file, repository revision,
+  shard SHA-256, and explicit tensor-name set; it authenticates the whole local shard, cross-checks
+  every selected shape and dtype against the reviewed inventory, and never publishes a model
+  manifest. On official shard 2 it converted expert 0's down/gate/up matrices from 18,874,368 BF16
+  bytes into three independently hashed INT4 chunks totaling 5,013,504 bytes with a 256-byte maximum
+  codec source read. The journaled rerun reproduced the same policy and content hashes without
+  re-encoding. `docs/evidence/glm47_shard2_expert0_int4_conversion.json` remains diagnostic and
+  non-qualifying.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and

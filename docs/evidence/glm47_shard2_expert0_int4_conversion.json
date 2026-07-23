@@ -1,0 +1,50 @@
+{
+  "buffer_bytes": 1048576,
+  "candidate_hash": "sha256:0b09bf971fe0ecce07d9f3801518c31cd2d574d18a98fb47faf132407b876850",
+  "compression_ratio": 3.764705882352941,
+  "encoded_tensor_bytes": 5013504,
+  "execution_scope": "authenticated_shard_tensor_subset",
+  "full_policy_hash": "sha256:c6af0d95cedb6b602196159cd0b420e14bda8a4612daabf42d101af07faa7e77",
+  "group_size": 128,
+  "maximum_codec_source_read_bytes": 256,
+  "outputs": [
+    {
+      "encoded_bytes": 1671168,
+      "encoding": "int4_symmetric",
+      "source_bytes": 6291456,
+      "source_checksum": "sha256:b2969d0a5597276ce7f0b4fc6dc6b00a1cd5957a2ec47ec5bdc0e5f9a2d30f04",
+      "target_hash": "sha256:105fd166ad0dc98a9d67121f7fa59107c5b4f5d614baf975557ddfe175d932ae",
+      "tensor_name": "model.layers.1.mlp.experts.0.down_proj.weight"
+    },
+    {
+      "encoded_bytes": 1671168,
+      "encoding": "int4_symmetric",
+      "source_bytes": 6291456,
+      "source_checksum": "sha256:6a3434e1632ceef12846dedda32c77c91cbc8c0fb6a3b9d7f7cfbe6bef1abc70",
+      "target_hash": "sha256:7b7cca0667a98b65dfa62853c081388d7fadb2a93508bd8247a6155af621329e",
+      "tensor_name": "model.layers.1.mlp.experts.0.gate_proj.weight"
+    },
+    {
+      "encoded_bytes": 1671168,
+      "encoding": "int4_symmetric",
+      "source_bytes": 6291456,
+      "source_checksum": "sha256:20c7c524f6c87389c77d25de75e3d531a57760ea8a3d02af2978c75184472e57",
+      "target_hash": "sha256:53fba681a68a4d847194c2441e9b8653455f14abebb9e7b463a8c69b870b27d5",
+      "tensor_name": "model.layers.1.mlp.experts.0.up_proj.weight"
+    }
+  ],
+  "publishes_model_manifest": false,
+  "qualifies_precision_policy": false,
+  "repository": "zai-org/GLM-4.7-Flash",
+  "revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+  "schema_id": "ams.glm4.shard-slice-conversion.v1",
+  "shard_content_hash": "sha256:8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1",
+  "shard_file_bytes": 1270648128,
+  "shard_name": "model-00002-of-00048.safetensors",
+  "slice_policy_hash": "sha256:c3798ed2df6d3f6c6d8b7e14ed70564960b07815c486f7314a2964606c0aaadf",
+  "source_index_hash": "sha256:91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791",
+  "source_root": "sha256:1b297252e41f3e7e2fb6cd0f52dfa43e4d036b59bfe96be5688af1938d4be45f",
+  "source_tensor_bytes": 18874368,
+  "status": "diagnostic",
+  "tensor_count": 3
+}

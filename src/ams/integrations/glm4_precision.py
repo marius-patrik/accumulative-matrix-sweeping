@@ -22,6 +22,7 @@ from ams.integrations.glm4_moe_lite import (
 from ams.integrations.huggingface import (
     HuggingFaceCatalogTensor,
     HuggingFaceMixedPolicy,
+    HuggingFaceShardIndex,
     HuggingFaceTensorAssignment,
     HuggingFaceTensorEncoding,
     build_huggingface_mixed_policy,
@@ -240,7 +241,16 @@ def _validated_catalog_by_name(
     for slot in expected_slots:
         tensor = tensor_by_name[slot.tensor_name]
         expected_source = _SOURCE_DTYPES.get(tensor.source_dtype)
-        if expected_source is None or expected_source[0] is not tensor.dtype:
+        expected_dtype = (
+            DType.FLOAT32
+            if slot.role is Glm4MoeLiteTensorRole.ROUTER_CORRECTION_BIAS
+            else DType.BFLOAT16
+        )
+        if (
+            expected_source is None
+            or expected_source[0] is not tensor.dtype
+            or tensor.dtype is not expected_dtype
+        ):
             raise AmsError(
                 ErrorCode.CAPABILITY_MISMATCH,
                 f"GLM-4 tensor source dtype is unsupported or inconsistent: {slot.tensor_name}",
@@ -258,6 +268,64 @@ def _validated_catalog_by_name(
                 f"GLM-4 tensor shape or source length is inconsistent: {slot.tensor_name}",
             )
     return tensor_by_name
+
+
+def derive_expected_glm4_catalog_tensors(
+    architecture: Glm4MoeLiteArchitecture,
+    inventory: Glm4MoeLiteTensorInventory,
+    index: HuggingFaceShardIndex,
+) -> tuple[HuggingFaceCatalogTensor, ...]:
+    """Derive shape/dtype policy metadata; this does not authenticate payload offsets."""
+    expected_slots = expected_glm4_moe_lite_tensor_slots(architecture)
+    entry_by_name = {entry.tensor_name: entry for entry in index.entries}
+    if (
+        inventory.architecture_hash != architecture.content_hash
+        or inventory.index_hash != index.content_hash
+        or inventory.slots != expected_slots
+        or len(entry_by_name) != len(index.entries)
+        or set(entry_by_name) != {slot.tensor_name for slot in expected_slots}
+    ):
+        raise AmsError(
+            ErrorCode.CAPABILITY_MISMATCH,
+            "GLM-4 expected catalog inputs do not identify one reviewed inventory",
+        )
+    offsets_by_shard = {shard_name: 0 for shard_name in index.shard_names}
+    tensors = []
+    for slot in expected_slots:
+        shape = expected_glm4_moe_lite_tensor_shape(architecture, slot)
+        if slot.role is Glm4MoeLiteTensorRole.ROUTER_CORRECTION_BIAS:
+            dtype = DType.FLOAT32
+            source_dtype = "F32"
+            item_bytes = 4
+        else:
+            dtype = DType.BFLOAT16
+            source_dtype = "BF16"
+            item_bytes = 2
+        source_length = checked_mul(
+            checked_product(shape, name="glm4_precision.expected_elements"),
+            item_bytes,
+            name="glm4_precision.expected_bytes",
+        )
+        shard_name = entry_by_name[slot.tensor_name].shard_name
+        source_offset = offsets_by_shard[shard_name]
+        offsets_by_shard[shard_name] = checked_add(
+            source_offset,
+            source_length,
+            name="glm4_precision.expected_shard_bytes",
+        )
+        tensors.append(
+            HuggingFaceCatalogTensor(
+                tensor_name=slot.tensor_name,
+                shard_name=shard_name,
+                object_id=f"hf:{shard_name}",
+                dtype=dtype,
+                source_dtype=source_dtype,
+                shape=shape,
+                source_offset=source_offset,
+                source_length=source_length,
+            )
+        )
+    return tuple(tensors)
 
 
 def build_experimental_glm4_precision_candidate(

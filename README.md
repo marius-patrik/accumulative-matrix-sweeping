@@ -158,6 +158,12 @@ The staged `int4_bringup_v1` policy is now independently bound to all 9,703 offi
 48 pinned shard headers. It keeps 292 sensitive tensors exact, assigns 9,411 tensors to grouped INT4,
 and estimates 17,527,623,424 encoded tensor bytes from 62,442,983,168 source bytes. Its evidence in
 `docs/evidence/glm47_int4_bringup_candidate.json` remains explicitly experimental.
+The first authenticated payload conversion under that profile is also complete: all three matrices
+for routed expert 0 in official shard 2 were converted from 18,874,368 BF16 bytes to three verified
+INT4 chunks totaling 5,013,504 bytes. A repeated run returned the same journal, policy, and content
+hashes without re-encoding published chunks. This is a tensor-slice milestone only; it deliberately
+publishes no model manifest. Exact results are in
+`docs/evidence/glm47_shard2_expert0_int4_conversion.json`.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds

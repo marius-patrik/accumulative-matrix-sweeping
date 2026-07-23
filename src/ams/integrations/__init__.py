@@ -20,6 +20,7 @@ from ams.integrations.glm4_precision import (
     accuracy_first_glm4_encoding_for_role,
     build_accuracy_first_glm4_precision_candidate,
     build_experimental_glm4_precision_candidate,
+    derive_expected_glm4_catalog_tensors,
     experimental_glm4_encoding_for_role,
     glm4_encoding_for_role,
     qualify_glm4_precision_candidate,
@@ -91,6 +92,7 @@ from ams.integrations.huggingface import (
     build_huggingface_mixed_plan,
     build_huggingface_mixed_policy,
     build_huggingface_progressive_mixed_plan,
+    build_huggingface_shard_catalog,
     parse_huggingface_shard_index,
 )
 from ams.integrations.huggingface_staging import (
@@ -175,7 +177,9 @@ __all__ = [
     "build_huggingface_mixed_plan",
     "build_huggingface_mixed_policy",
     "build_huggingface_progressive_mixed_plan",
+    "build_huggingface_shard_catalog",
     "compare_glm4_quantization_variants",
+    "derive_expected_glm4_catalog_tensors",
     "expected_glm4_moe_lite_tensor_shape",
     "expected_glm4_moe_lite_tensor_slots",
     "expected_glm_tensor_shape",
