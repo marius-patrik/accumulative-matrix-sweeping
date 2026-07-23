@@ -187,9 +187,12 @@ The production DSA selector scans offloaded causal index keys while retaining on
 managed scratch is independent of context length even though scan I/O remains proportional to context.
 The pinned GLM-5.2 config and Hugging Face index also pass an exact,
 fail-closed 59,585-name architecture inventory, including the separate MTP layer and every routed
-expert tensor. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal
-top-k/tie behavior, stable activations, and noaux_tc expert routing; model weight shards have not been
-downloaded. The separately pinned GLM-4.7-Flash bring-up model now passes its own exact 9,703-name
+expert tensor. A reproducible audit authenticated the exact 282-shard LFS inventory and matched every
+remote safetensors header while reading only 7,467,536 structural bytes from the 1.506 TB source set;
+no weight payload was read or downloaded, and the evidence explicitly does not qualify a precision
+policy. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal
+top-k/tie behavior, stable activations, and noaux_tc expert routing. The separately pinned
+GLM-4.7-Flash bring-up model now passes its own exact 9,703-name
 GLM-4-MoE-Lite inventory, including 47 inference layers and a distinct MTP layer; its anomalous
 provider `total_size` is admitted as an element count only for the exact pinned index hash after all
 48 shard headers proved the interpretation. A batch-one miniature

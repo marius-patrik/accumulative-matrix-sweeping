@@ -28,7 +28,7 @@ projected from parameter counts.
 | Froq personal fork | `rebrand/grok-to-froq` at `9821dfe2e48c2e48b8c92244b716d1225153b606` | User-owned clean worktree containing the completed rebrand and Windows build fixes. It remains read-only during AMS reconstruction. |
 | Froq upstream | `xai-org/grok-build` `main` at `a5727c5960452e7527a154b25cb5bf00cda0545e` | Model-agnostic harness reference. It is one commit ahead and three commits behind the current fork ancestry at this status date. |
 | GLM-4.7-Flash model | `zai-org/GLM-4.7-Flash` at `7dd20894a642a0aa287e9827cb1a1f7f91386b67` | Official config, generation config, complete tokenizer triplet, README, and safetensors index are pinned locally. `tokenizer.json` is 20,217,442 bytes with SHA-256 `19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d`; tokenizer config and chat-template hashes are `31a173e2797ddc8b72ac996803513e627fc28d7aad02cfcce321a431d865c86d` and `d63ad536c3c81880043e22ec7fd08db42b4d8fb7c89c7138bc562bfa25281375`. The config and index SHA-256 digests are `dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb` and `91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791`. Shard `model-00002-of-00048.safetensors` is pinned locally at 1,270,648,128 bytes with SHA-256 `8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1`; no other weight shard has been downloaded. |
-| GLM-5.2 model | `zai-org/GLM-5.2` at `b4734de4facf877f85769a911abafc5283eab3d9` | Official config, tokenizer metadata/template, license, README, and safetensors index are pinned locally. No weight shard has been downloaded. |
+| GLM-5.2 model | `zai-org/GLM-5.2` at `b4734de4facf877f85769a911abafc5283eab3d9` | Official config, generation config, tokenizer/template, license, README, and safetensors index are pinned locally and verified. Config, index, tokenizer, and template SHA-256 digests are `185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a`, `5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e`, `19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d`, and `172dc74a35e1752df75ecfb2b2cf9326d2852bb1379868ebeec9571654489679`. The exact 282-shard LFS inventory is locked by `sha256:a7ed6dcbd48c7740d354d723a2e428ae74daf5e269d5da020b05389f40aab512`; no weight shard has been downloaded. |
 | GLM-4-MoE-Lite reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, generated/modular model, tests, and documentation used to pin MLA, interleaved RoPE, sigmoid/noaux_tc routing, dense/sparse scheduling, and base-model treatment of MTP weights. |
 | GLM-MoE-DSA reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, model, tests, and documentation used to derive execution order and compatibility risks. |
 
@@ -136,6 +136,14 @@ The reconstruction branch currently contains:
   282 shards and 1,506,659,919,872 declared BF16 tensor bytes. The config and index SHA-256 digests are
   `185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a` and
   `5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e`.
+- a complete immutable GLM-5.2 source-header audit. It authenticates the pinned revision's 282 LFS
+  names, sizes, and SHA-256 identities under one canonical inventory hash, then proves all 59,585
+  remote safetensors headers match the official index. It observed 753,329,940,480 elements,
+  1,506,659,919,872 tensor bytes, 1,506,667,387,408 source-file bytes, 59,509 BF16 tensors, and 76
+  FP32 tensors while reading 7,467,536 prefix/header bytes and zero tensor-payload bytes. The exact
+  result is recorded in `docs/evidence/glm52_source_audit.json` with
+  `qualifies_precision_policy = false`; expected LFS hashes are now complete, but payload integrity is
+  established only as each shard is staged for conversion.
 - a separate fail-closed GLM-4-MoE-Lite architecture and checkpoint boundary. Its generated 9,703-name
   inventory exactly matches the pinned GLM-4.7-Flash index: one dense inference layer, 46 sparse
   inference layers, and a separately marked 212-tensor MTP layer, including its private embedding and
@@ -161,8 +169,8 @@ The reconstruction branch currently contains:
   without remote I/O, leaves a failed-hash object unpublished, and releases only the exact object path
   under a validated cache marker. A real 1,270,648,128-byte GLM-4.7 shard completed stage and guarded
   release with a fixed 4 MiB buffer. Progressive mixed conversion now consumes this lease while keeping
-  source residency to one shard; GLM-5.2 conversion still requires complete official source hashes and
-  a qualified precision policy.
+  source residency to one shard; GLM-5.2 now has complete expected official source hashes but still
+  requires a qualified precision policy and per-shard payload verification during conversion.
 - an explicitly structural header catalog and progressive mixed plan. The catalog validates every
   header, index mapping, total-size interpretation, expected shard hash, and source size without
   reading tensor payloads or claiming those payload hashes have been verified. The progressive plan

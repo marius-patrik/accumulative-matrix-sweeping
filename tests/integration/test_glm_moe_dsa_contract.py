@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -111,6 +112,30 @@ def test_official_glm52_dimensions_imply_the_observed_59585_tensor_names() -> No
     assert len(slots) == 59_585
     assert sum(slot.role is GlmTensorRole.ROUTED_EXPERT_UP_PROJECTION for slot in slots) == 19_456
     assert sum(slot.role is GlmTensorRole.INDEXER_WK_PROJECTION for slot in slots) == 22
+
+
+def test_official_glm52_source_audit_is_pinned_and_structural_only() -> None:
+    evidence_path = Path(__file__).parents[2] / "docs" / "evidence" / "glm52_source_audit.json"
+    evidence = json.loads(evidence_path.read_bytes())
+    assert evidence["repository"] == "zai-org/GLM-5.2"
+    assert evidence["revision"] == "b4734de4facf877f85769a911abafc5283eab3d9"
+    assert evidence["architecture_hash"] == (
+        "sha256:185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a"
+    )
+    assert evidence["index_hash"] == (
+        "sha256:5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e"
+    )
+    assert evidence["shard_inventory_hash"] == (
+        "sha256:a7ed6dcbd48c7740d354d723a2e428ae74daf5e269d5da020b05389f40aab512"
+    )
+    assert evidence["shard_count"] == 282
+    assert evidence["tensor_count"] == 59_585
+    assert evidence["tensor_bytes"] == evidence["declared_total_size"] == 1_506_659_919_872
+    assert evidence["tensor_elements"] == 753_329_940_480
+    assert evidence["header_bytes_read"] == 7_467_536
+    assert evidence["weight_payload_bytes_read"] == 0
+    assert evidence["status"] == "structural_headers_only"
+    assert evidence["qualifies_precision_policy"] is False
 
 
 @pytest.mark.parametrize(
