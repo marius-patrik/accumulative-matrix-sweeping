@@ -141,7 +141,11 @@ official shard and sampled 64 evenly spaced groups from each of its 200 compress
 read larger than 256 bytes: INT4 reached 0.9922 cosine similarity and 0.1254 normalized RMS error,
 while ternary routed experts reached 0.9004 and 0.4352 respectively. This is useful tensor-error
 evidence—not a quality pass—and makes the blanket expert-ternary assignment an explicit comparison
-target for later alternatives. The candidate remains experimental: it has not been converted as a
+target for later alternatives. A same-sample sweep across ternary thresholds 0.3 through 1.0 found
+only a marginal best result at 0.8 (0.90085 cosine, 0.43414 normalized RMS error), while symmetric
+INT4 reached 0.99317 and 0.11754 on those exact routed-expert groups. Threshold calibration alone is
+therefore rejected for the full conversion; a higher-capacity 2/3-bit or residual-assisted candidate
+must be measured next. The candidate remains experimental: it has not been converted as a
 complete package, used for model inference, or quality-qualified. Qualification requires exact
 corpus, evaluator, baseline, runtime, sample-count, NLL, token-agreement, and task-retention evidence
 against caller-supplied thresholds.

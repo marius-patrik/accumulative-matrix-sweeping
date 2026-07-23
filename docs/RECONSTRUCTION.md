@@ -237,8 +237,14 @@ The reconstruction branch currently contains:
   `docs/evidence/glm47_shard2_quantization_probe.json`. It covers one shard and tensor reconstruction
   only; its schema fixes `qualifies_precision_policy` to false. It neither qualifies the blanket
   routed-expert ternary choice nor substitutes for whole-model logits, tasks, latency, or resource
-  evidence. Instead it makes less aggressive expert encodings and ternary calibration variants
-  mandatory comparison candidates before full conversion. A candidate can become qualified only
+  evidence. A same-source comparison then applied ternary thresholds 0.3 through 1.0 and symmetric
+  INT4 to the identical 12,288 sampled routed-expert groups. Threshold 0.8 was the best ternary result
+  at 0.900846 cosine similarity and 0.434139 normalized RMS error; INT4 reached 0.993172 and 0.117545
+  while using 320,864,256 bytes versus ternary's 141,557,760 bytes for the 192 selected tensors.
+  `docs/evidence/glm47_shard2_routed_expert_comparison.json` therefore records
+  `requires_higher_capacity_candidate`: threshold tuning alone is rejected, and 2/3-bit or
+  residual-assisted expert encodings must be compared before full conversion. A candidate can become
+  qualified only
   through evidence that
   identifies the exact source/candidate, calibration and evaluation corpora, evaluator, trusted
   baseline, and candidate runtime, and clears every explicitly supplied token-count, task-count, NLL,

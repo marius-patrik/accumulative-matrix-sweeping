@@ -21,10 +21,14 @@ from ams.integrations.glm4_precision import (
     qualify_glm4_precision_candidate,
 )
 from ams.integrations.glm4_quantization_probe import (
+    Glm4QuantizationCodecVariant,
+    Glm4QuantizationComparisonEvidence,
     Glm4QuantizationErrorMetrics,
     Glm4QuantizationProbeConfig,
     Glm4QuantizationProbeEvidence,
     Glm4QuantizationProbeStatus,
+    Glm4QuantizationVariantMetrics,
+    compare_glm4_quantization_variants,
     probe_experimental_glm4_quantization_shard,
 )
 from ams.integrations.glm4_tokenizer import (
@@ -109,10 +113,13 @@ __all__ = [
     "Glm4PrecisionQualityEvidence",
     "Glm4PrecisionQualityThresholds",
     "Glm4QualifiedPrecisionPolicy",
+    "Glm4QuantizationCodecVariant",
+    "Glm4QuantizationComparisonEvidence",
     "Glm4QuantizationErrorMetrics",
     "Glm4QuantizationProbeConfig",
     "Glm4QuantizationProbeEvidence",
     "Glm4QuantizationProbeStatus",
+    "Glm4QuantizationVariantMetrics",
     "Glm4TokenizerAssets",
     "Glm4TokenizerFile",
     "Glm4TokenizerPolicy",
@@ -157,6 +164,7 @@ __all__ = [
     "build_huggingface_mixed_plan",
     "build_huggingface_mixed_policy",
     "build_huggingface_progressive_mixed_plan",
+    "compare_glm4_quantization_variants",
     "expected_glm4_moe_lite_tensor_shape",
     "expected_glm4_moe_lite_tensor_slots",
     "expected_glm_tensor_shape",

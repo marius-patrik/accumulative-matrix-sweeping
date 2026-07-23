@@ -16,9 +16,11 @@ from ams.descriptors import DType, StorageObject
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
     Glm4MoeLiteTensorRole,
+    Glm4QuantizationCodecVariant,
     Glm4QuantizationProbeConfig,
     HuggingFaceCatalogTensor,
     build_experimental_glm4_precision_candidate,
+    compare_glm4_quantization_variants,
     expected_glm4_moe_lite_tensor_shape,
     parse_glm4_moe_lite_architecture,
     parse_huggingface_shard_index,
@@ -91,6 +93,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--group-size", type=int, default=128)
     parser.add_argument("--groups-per-tensor", type=int, default=64)
     parser.add_argument("--hash-buffer-bytes", type=int, default=1024 * 1024)
+    parser.add_argument(
+        "--compare-routed-experts",
+        action="store_true",
+        help="Compare fixed ternary threshold variants and INT4 on identical routed-expert groups",
+    )
     return parser
 
 
@@ -297,6 +304,49 @@ def _run(arguments: argparse.Namespace):
             content_hash=expected_hash,
         ),
     )
+    probe_config = Glm4QuantizationProbeConfig(
+        groups_per_tensor=arguments.groups_per_tensor,
+        hash_buffer_bytes=arguments.hash_buffer_bytes,
+    )
+    if arguments.compare_routed_experts:
+        variants = (
+            *(
+                Glm4QuantizationCodecVariant(
+                    variant_id=f"ternary-threshold-{numerator:02d}-of-10",
+                    encoding="ternary_trit5",
+                    ternary_config=TernaryCodecConfig(
+                        group_size=arguments.group_size,
+                        threshold_numerator=numerator,
+                        threshold_denominator=10,
+                    ),
+                )
+                for numerator in range(3, 11)
+            ),
+            Glm4QuantizationCodecVariant(
+                variant_id="int4-symmetric",
+                encoding="int4_symmetric",
+                int4_config=int4_config,
+            ),
+        )
+        return compare_glm4_quantization_variants(
+            architecture,
+            inventory,
+            index,
+            source_repository=arguments.repository,
+            source_revision=arguments.revision,
+            shard_name=shard_path.name,
+            reader=reader,
+            expected_shard_hash=expected_hash,
+            baseline_candidate_hash=candidate.candidate_hash,
+            baseline_policy_hash=candidate.policy.policy_hash,
+            selected_roles=(
+                Glm4MoeLiteTensorRole.ROUTED_EXPERT_GATE_PROJECTION,
+                Glm4MoeLiteTensorRole.ROUTED_EXPERT_UP_PROJECTION,
+                Glm4MoeLiteTensorRole.ROUTED_EXPERT_DOWN_PROJECTION,
+            ),
+            variants=variants,
+            config=probe_config,
+        )
     return probe_experimental_glm4_quantization_shard(
         architecture,
         inventory,
@@ -310,10 +360,7 @@ def _run(arguments: argparse.Namespace):
         policy_hash=candidate.policy.policy_hash,
         ternary_config=ternary_config,
         int4_config=int4_config,
-        config=Glm4QuantizationProbeConfig(
-            groups_per_tensor=arguments.groups_per_tensor,
-            hash_buffer_bytes=arguments.hash_buffer_bytes,
-        ),
+        config=probe_config,
     )
 
 

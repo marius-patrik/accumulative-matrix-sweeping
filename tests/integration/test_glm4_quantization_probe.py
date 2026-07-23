@@ -9,8 +9,11 @@ from ams.canonical import canonical_json_bytes
 from ams.codecs import Int4CodecConfig, TernaryCodecConfig
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
+    Glm4MoeLiteTensorRole,
+    Glm4QuantizationCodecVariant,
     Glm4QuantizationProbeConfig,
     Glm4QuantizationProbeStatus,
+    compare_glm4_quantization_variants,
     expected_glm4_moe_lite_tensor_slots,
     parse_glm4_moe_lite_architecture,
     parse_huggingface_shard_index,
@@ -202,6 +205,92 @@ def test_probe_rejects_header_and_normalized_index_set_drift() -> None:
         _probe(reader, identity_in_probe_shard=False)
     assert caught.value.code is ErrorCode.CAPABILITY_MISMATCH
     assert caught.value.evidence == {"missing": 0, "unexpected": 1}
+
+
+def test_comparison_uses_identical_groups_for_ternary_and_int4() -> None:
+    payload = _safetensors_payload()
+    reader = ObservedMemoryReader(payload)
+    architecture, index, inventory = _index()
+    comparison = compare_glm4_quantization_variants(
+        architecture,
+        inventory,
+        index,
+        source_repository="fixture/glm4",
+        source_revision="fixture-revision",
+        shard_name=_SHARD,
+        reader=reader,
+        expected_shard_hash=_digest(payload),
+        baseline_candidate_hash=_digest("candidate"),
+        baseline_policy_hash=_digest("policy"),
+        selected_roles=(Glm4MoeLiteTensorRole.ROUTED_EXPERT_GATE_PROJECTION,),
+        variants=(
+            Glm4QuantizationCodecVariant(
+                "ternary-threshold-07-of-10",
+                "ternary_trit5",
+                ternary_config=TernaryCodecConfig(group_size=4),
+            ),
+            Glm4QuantizationCodecVariant(
+                "int4-symmetric",
+                "int4_symmetric",
+                int4_config=Int4CodecConfig(group_size=4),
+            ),
+        ),
+        config=Glm4QuantizationProbeConfig(groups_per_tensor=2, hash_buffer_bytes=7),
+    )
+    assert comparison.schema_id == "ams.glm4.quantization-comparison.v1"
+    assert comparison.qualifies_precision_policy is False
+    assert comparison.selected_roles == ("routed_expert_gate_projection",)
+    assert comparison.selected_tensor_count == 1
+    assert comparison.selected_tensor_source_bytes == 24
+    assert comparison.sampled_group_count == 2
+    assert comparison.sampled_element_count == 8
+    assert comparison.sampled_source_bytes_read == 16
+    assert comparison.maximum_sample_read_bytes == 8
+    assert comparison.source_dtype_counts == (("BF16", 1),)
+    variants = {variant.variant_id: variant for variant in comparison.variants}
+    assert variants["ternary-threshold-07-of-10"].selected_tensor_encoded_bytes == 15
+    assert variants["int4-symmetric"].selected_tensor_encoded_bytes == 18
+    assert all(variant.metrics.sampled_group_count == 2 for variant in comparison.variants)
+    assert all(variant.metrics.sampled_source_bytes == 16 for variant in comparison.variants)
+    assert (
+        variants["int4-symmetric"].metrics.normalized_root_mean_square_error
+        < variants["ternary-threshold-07-of-10"].metrics.normalized_root_mean_square_error
+    )
+    assert not any(length == 24 for _, length in reader.reads)
+
+
+def test_comparison_rejects_different_group_windows_before_source_io() -> None:
+    payload = _safetensors_payload()
+    reader = ObservedMemoryReader(payload)
+    architecture, index, inventory = _index()
+    with pytest.raises(AmsError, match="shared group size") as caught:
+        compare_glm4_quantization_variants(
+            architecture,
+            inventory,
+            index,
+            source_repository="fixture/glm4",
+            source_revision="fixture-revision",
+            shard_name=_SHARD,
+            reader=reader,
+            expected_shard_hash=_digest(payload),
+            baseline_candidate_hash=_digest("candidate"),
+            baseline_policy_hash=_digest("policy"),
+            selected_roles=(Glm4MoeLiteTensorRole.ROUTED_EXPERT_GATE_PROJECTION,),
+            variants=(
+                Glm4QuantizationCodecVariant(
+                    "ternary",
+                    "ternary_trit5",
+                    ternary_config=TernaryCodecConfig(group_size=4),
+                ),
+                Glm4QuantizationCodecVariant(
+                    "int4",
+                    "int4_symmetric",
+                    int4_config=Int4CodecConfig(group_size=2),
+                ),
+            ),
+        )
+    assert caught.value.code is ErrorCode.CAPABILITY_MISMATCH
+    assert reader.reads == []
 
 
 def test_committed_official_shard_evidence_is_nonqualifying_and_self_consistent() -> None:
