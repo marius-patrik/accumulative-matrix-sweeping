@@ -1,5 +1,13 @@
 """Strict normalization boundaries for external model formats."""
 
+from ams.integrations.glm4_layer_differential import (
+    OFFICIAL_GLM47_LAYER_THRESHOLDS,
+    Glm4LayerDifferentialEvidence,
+    Glm4LayerDifferentialStatus,
+    Glm4LayerDifferentialThresholds,
+    Glm4LayerObservation,
+    compare_glm4_layer_observations,
+)
 from ams.integrations.glm4_moe_lite import (
     Glm4MoeLiteArchitecture,
     Glm4MoeLiteTensorInventory,
@@ -111,7 +119,12 @@ from ams.integrations.safetensors import (
 
 __all__ = [
     "OFFICIAL_GLM4_TOKENIZER_POLICY",
+    "OFFICIAL_GLM47_LAYER_THRESHOLDS",
     "Glm4AddedToken",
+    "Glm4LayerDifferentialEvidence",
+    "Glm4LayerDifferentialStatus",
+    "Glm4LayerDifferentialThresholds",
+    "Glm4LayerObservation",
     "Glm4LowBitDiagnosticConfig",
     "Glm4MoeLiteArchitecture",
     "Glm4MoeLiteTensorInventory",
@@ -178,6 +191,7 @@ __all__ = [
     "build_huggingface_mixed_policy",
     "build_huggingface_progressive_mixed_plan",
     "build_huggingface_shard_catalog",
+    "compare_glm4_layer_observations",
     "compare_glm4_quantization_variants",
     "derive_expected_glm4_catalog_tensors",
     "expected_glm4_moe_lite_tensor_shape",

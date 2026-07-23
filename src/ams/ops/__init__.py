@@ -14,12 +14,14 @@ from ams.ops.glm_moe_dsa import (
 from ams.ops.glm_moe_dsa_model import (
     Glm4ReferenceLayerTrace,
     Glm4ReferenceOutput,
+    Glm4SparseLayerReferenceOutput,
     GlmReferenceLayerTrace,
     GlmReferenceOutput,
     GlmReferenceTensor,
     GlmReferenceWeights,
     GlmWeightAccess,
     run_glm4_moe_lite_prefill_reference,
+    run_glm4_moe_lite_sparse_layer_reference,
     run_glm_moe_dsa_prefill_reference,
 )
 from ams.ops.glm_package_weights import (
@@ -46,6 +48,7 @@ __all__ = [
     "Glm4NativeTensorBinding",
     "Glm4ReferenceLayerTrace",
     "Glm4ReferenceOutput",
+    "Glm4SparseLayerReferenceOutput",
     "GlmExpertRouting",
     "GlmPackageReadEvidence",
     "GlmPackageWeights",
@@ -64,6 +67,7 @@ __all__ = [
     "rms_norm_reference",
     "route_glm_experts_reference",
     "run_glm4_moe_lite_prefill_reference",
+    "run_glm4_moe_lite_sparse_layer_reference",
     "run_glm_moe_dsa_prefill_reference",
     "serialize_glm4_native_binding_plan",
     "silu_reference",

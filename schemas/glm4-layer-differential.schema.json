@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ams.local/schemas/glm4-layer-differential.schema.json",
+  "title": "AMS GLM-4 Official Layer Differential Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "status",
+    "source",
+    "input",
+    "reference",
+    "candidate",
+    "sample_count",
+    "hidden_size",
+    "vocabulary_size",
+    "metrics",
+    "gates",
+    "reference_observation_hash",
+    "candidate_observation_hash",
+    "thresholds",
+    "blockers"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "ams.glm4-layer-differential.v1"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed",
+        "blocked"
+      ]
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "input": {
+      "$ref": "#/$defs/input"
+    },
+    "reference": {
+      "$ref": "#/$defs/observation"
+    },
+    "candidate": {
+      "$ref": "#/$defs/observation"
+    },
+    "sample_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4096
+    },
+    "hidden_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "vocabulary_size": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "metrics": {
+      "$ref": "#/$defs/metrics"
+    },
+    "gates": {
+      "$ref": "#/$defs/gates"
+    },
+    "reference_observation_hash": {
+      "$ref": "#/$defs/digest"
+    },
+    "candidate_observation_hash": {
+      "$ref": "#/$defs/digest"
+    },
+    "thresholds": {
+      "$ref": "#/$defs/thresholds"
+    },
+    "blockers": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "revision",
+        "architecture_hash",
+        "source_index_hash",
+        "layer_index",
+        "shard_name",
+        "shard_size_bytes",
+        "shard_sha256",
+        "shard_source_root",
+        "tensor_count",
+        "tensor_payload_bytes"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "architecture_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "source_index_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "layer_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "shard_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "shard_size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "shard_sha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "shard_source_root": {
+          "$ref": "#/$defs/digest"
+        },
+        "tensor_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tensor_payload_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_id",
+        "content_hash",
+        "sample_count",
+        "hidden_size"
+      ],
+      "properties": {
+        "schema_id": {
+          "const": "ams.glm47-layer-input.v1"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "hidden_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_id",
+        "runtime_version",
+        "runtime_code_hash",
+        "observation_hash",
+        "hidden_state_hash",
+        "logits_hash"
+      ],
+      "properties": {
+        "runtime_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "runtime_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "runtime_code_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "observation_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "hidden_state_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "logits_hash": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hidden_cosine_similarity",
+        "hidden_normalized_rmse",
+        "top_token_agreement",
+        "route_agreement"
+      ],
+      "properties": {
+        "hidden_cosine_similarity": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "hidden_normalized_rmse": {
+          "type": "number",
+          "minimum": 0
+        },
+        "top_token_agreement": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "route_agreement": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hidden_state_gate_passed",
+        "logit_gate_passed",
+        "full_layer_gate_passed",
+        "qualifies_precision_policy"
+      ],
+      "properties": {
+        "hidden_state_gate_passed": {
+          "type": "boolean"
+        },
+        "logit_gate_passed": {
+          "type": "boolean"
+        },
+        "full_layer_gate_passed": {
+          "type": "boolean"
+        },
+        "qualifies_precision_policy": {
+          "const": false
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_hidden_cosine_similarity",
+        "maximum_hidden_normalized_rmse",
+        "minimum_top_token_agreement"
+      ],
+      "properties": {
+        "minimum_hidden_cosine_similarity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "maximum_hidden_normalized_rmse": {
+          "type": "number",
+          "minimum": 0
+        },
+        "minimum_top_token_agreement": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    }
+  }
+}

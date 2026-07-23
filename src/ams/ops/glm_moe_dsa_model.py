@@ -152,6 +152,15 @@ class Glm4ReferenceOutput:
     layers: tuple[Glm4ReferenceLayerTrace, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class Glm4SparseLayerReferenceOutput:
+    """Independent scalar result for one sparse GLM-4-MoE-Lite layer."""
+
+    hidden_states: tuple[tuple[float, ...], ...]
+    causal_key_indices: tuple[tuple[int, ...], ...]
+    expert_routing: tuple[GlmExpertRouting, ...]
+
+
 type _MlaArchitecture = GlmMoeDsaArchitecture | Glm4MoeLiteArchitecture
 
 
@@ -493,6 +502,77 @@ def _run_glm4_full_attention(
         ),
         causal_indices,
     )
+
+
+def run_glm4_moe_lite_sparse_layer_reference(
+    architecture: Glm4MoeLiteArchitecture,
+    weights: GlmWeightAccess,
+    layer_index: int,
+    hidden_states: Sequence[Sequence[float]],
+) -> Glm4SparseLayerReferenceOutput:
+    """Execute one reviewed sparse decoder layer over caller-supplied hidden states."""
+
+    if (
+        isinstance(layer_index, bool)
+        or not isinstance(layer_index, int)
+        or not architecture.first_k_dense_replace <= layer_index < architecture.num_hidden_layers
+    ):
+        raise AmsError(ErrorCode.PLAN_INVALID, "GLM-4 reference layer is not a sparse layer")
+    if not hidden_states or len(hidden_states) > architecture.max_position_embeddings:
+        raise AmsError(
+            ErrorCode.PLAN_INVALID,
+            "GLM-4 reference hidden-state count is empty or exceeds context",
+        )
+    normalized_input: list[tuple[float, ...]] = []
+    for values in hidden_states:
+        row = tuple(float(value) for value in values)
+        if len(row) != architecture.hidden_size:
+            raise AmsError(
+                ErrorCode.PLAN_INVALID,
+                "GLM-4 reference hidden-state width differs from the architecture",
+            )
+        if any(not math.isfinite(value) for value in row):
+            raise AmsError(
+                ErrorCode.NUMERIC_FAILURE,
+                "GLM-4 reference hidden state contains a non-finite value",
+            )
+        normalized_input.append(row)
+    current = tuple(normalized_input)
+    prefix = f"model.layers.{layer_index}"
+    residual = current
+    input_norm_weight = weights.vector(
+        f"{prefix}.input_layernorm.weight",
+        architecture.hidden_size,
+    )
+    normalized = tuple(
+        rms_norm_reference(values, input_norm_weight, architecture.rms_norm_eps)
+        for values in current
+    )
+    attention, causal_indices = _run_glm4_full_attention(
+        architecture,
+        weights,
+        prefix,
+        normalized,
+    )
+    current = tuple(
+        _add(left, right, name="GLM-4 attention residual")
+        for left, right in zip(residual, attention, strict=True)
+    )
+    residual = current
+    post_norm_weight = weights.vector(
+        f"{prefix}.post_attention_layernorm.weight",
+        architecture.hidden_size,
+    )
+    normalized = tuple(
+        rms_norm_reference(values, post_norm_weight, architecture.rms_norm_eps)
+        for values in current
+    )
+    mlp, routes = _run_sparse_mlp(architecture, weights, prefix, normalized)
+    output = tuple(
+        _add(left, right, name="GLM-4 MLP residual")
+        for left, right in zip(residual, mlp, strict=True)
+    )
+    return Glm4SparseLayerReferenceOutput(output, causal_indices, routes)
 
 
 def run_glm4_moe_lite_prefill_reference(

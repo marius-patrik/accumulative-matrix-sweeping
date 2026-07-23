@@ -279,6 +279,17 @@ The reconstruction branch currently contains:
   codec source read. The journaled rerun reproduced the same policy and content hashes without
   re-encoding. `docs/evidence/glm47_shard2_expert0_int4_conversion.json` remains diagnostic and
   non-qualifying.
+- an authenticated official sparse-layer differential boundary. The exact pinned shard 2 is now
+  admitted as the complete 206-tensor layer 1 inventory before any execution. With PyTorch
+  2.13.0+cpu, Transformers 5.12.0, and safetensors 0.8.0, two deterministic BF16 hidden states ran
+  through the official `Glm4MoeLiteDecoderLayer` and the independent AMS Python composition over
+  the same shard. Expert routes agreed exactly; hidden outputs reached 0.999997796175087 cosine
+  similarity and 0.0020997596295421455 normalized RMS error, clearing the provisional 0.995/0.10
+  hidden-state thresholds. `docs/evidence/glm47_layer1_bf16_differential.json` is nevertheless
+  `blocked`, sets every qualification field false, and records why: no native `ams-core`
+  official-layer observation exists, and the absent layer-47/LM-head shard prevents the required
+  teacher-forced logit comparison. `ci/verify_glm4_official_layer.py` full-hashes the source,
+  rejects config/index/shard/toolchain drift, and exits 2 while either blocker remains.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -450,7 +461,7 @@ The reconstruction branch currently contains:
   no real Froq coding task or production GLM-4.7/GLM-5.2 package has run yet.
 
 The automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, passes 240 ordinary Python tests with four expected native-binary skips, then builds
+Draft 2020-12, passes 247 ordinary Python tests with four expected native-binary skips, then builds
 `ams-runtime` and passes all four skipped native-process/model-backed cases. It also runs 58 core plus
 eight runtime Rust tests with `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,

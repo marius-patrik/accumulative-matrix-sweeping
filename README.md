@@ -164,6 +164,17 @@ INT4 chunks totaling 5,013,504 bytes. A repeated run returned the same journal, 
 hashes without re-encoding published chunks. This is a tensor-slice milestone only; it deliberately
 publishes no model manifest. Exact results are in
 `docs/evidence/glm47_shard2_expert0_int4_conversion.json`.
+The same authenticated shard is now proven to contain all 206 tensors for official sparse decoder
+layer 1. A pinned Transformers 5.12.0 BF16 execution and the independent AMS Python semantic oracle
+ran two deterministic positions from that complete 1,270,648,128-byte source object. Expert routes
+agreed for both positions; the final hidden states reached 0.9999978 cosine similarity and 0.0020998
+normalized RMS error. This clears the provisional hidden-state thresholds, but
+`docs/evidence/glm47_layer1_bf16_differential.json` remains deliberately blocked and
+non-qualifying: the candidate was not the native `ams-core` path, and shard 2 does not contain the
+LM head required for teacher-forced logit agreement. Reproduce the diagnostic with
+`pip install -e ".[official-layer]"` followed by
+`python ci/verify_glm4_official_layer.py <asset-root> <shard-2-path> --samples 2`; exit status 2
+means the recorded blockers remain, not that the authenticated hidden-state comparison failed.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds

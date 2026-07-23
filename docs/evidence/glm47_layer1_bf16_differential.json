@@ -1,0 +1,66 @@
+{
+  "blockers": [
+    "candidate runtime is the AMS Python semantic oracle, not native ams-core execution",
+    "official LM-head shard model-00047-of-00048.safetensors is absent; teacher-forced logits were not produced",
+    "teacher-forced logits are absent from both observations"
+  ],
+  "candidate": {
+    "hidden_state_hash": "sha256:8e2783bec7547f7eb17217ddc5ea1d563fb0802a572bb12ccf2223792acfaf1a",
+    "logits_hash": null,
+    "observation_hash": "sha256:3c0eb7eb01a6dcac7988a7fbb99005f427cfd2e1d2f3ea3cbe3b978be3968c9a",
+    "runtime_code_hash": "sha256:4ffa1ba404e13a955b4fbb237bbe51f74b1cfc4eccb71000aa15ac096639b7be",
+    "runtime_id": "ams.python.glm4_sparse_layer_reference",
+    "runtime_version": "ams/0.1.0.dev0;torch/2.13.0+cpu"
+  },
+  "candidate_observation_hash": "sha256:3c0eb7eb01a6dcac7988a7fbb99005f427cfd2e1d2f3ea3cbe3b978be3968c9a",
+  "gates": {
+    "full_layer_gate_passed": false,
+    "hidden_state_gate_passed": true,
+    "logit_gate_passed": false,
+    "qualifies_precision_policy": false
+  },
+  "hidden_size": 2048,
+  "input": {
+    "content_hash": "sha256:d2a769502ff37e2a651cc2dd53b4d820d8bb10fe7f886e9f9c2264f29ab5b3a6",
+    "hidden_size": 2048,
+    "sample_count": 2,
+    "schema_id": "ams.glm47-layer-input.v1"
+  },
+  "metrics": {
+    "hidden_cosine_similarity": 0.999997796175087,
+    "hidden_normalized_rmse": 0.0020997596295421455,
+    "route_agreement": 1.0,
+    "top_token_agreement": null
+  },
+  "reference": {
+    "hidden_state_hash": "sha256:5ba65bb60c4f176a3f3c25e721285b86da47827563cb4b98d62adc85571e2fc8",
+    "logits_hash": null,
+    "observation_hash": "sha256:b8103829e4edae9dfc27ab1b80bd529ceb374a13788777269f6d8f0513009e9e",
+    "runtime_code_hash": "sha256:7e774f4369313976e849e09ed7c0163c9805f2544c9343b42b9e7fd920e57460",
+    "runtime_id": "transformers.glm4_moe_lite",
+    "runtime_version": "transformers/5.12.0;torch/2.13.0+cpu;safetensors/0.8.0"
+  },
+  "reference_observation_hash": "sha256:b8103829e4edae9dfc27ab1b80bd529ceb374a13788777269f6d8f0513009e9e",
+  "sample_count": 2,
+  "schema_id": "ams.glm4-layer-differential.v1",
+  "source": {
+    "architecture_hash": "sha256:dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb",
+    "layer_index": 1,
+    "repository": "zai-org/GLM-4.7-Flash",
+    "revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+    "shard_name": "model-00002-of-00048.safetensors",
+    "shard_sha256": "sha256:8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1",
+    "shard_size_bytes": 1270648128,
+    "shard_source_root": "sha256:1b297252e41f3e7e2fb6cd0f52dfa43e4d036b59bfe96be5688af1938d4be45f",
+    "source_index_hash": "sha256:91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791",
+    "tensor_count": 206,
+    "tensor_payload_bytes": 1270622976
+  },
+  "status": "blocked",
+  "thresholds": {
+    "maximum_hidden_normalized_rmse": 0.1,
+    "minimum_hidden_cosine_similarity": 0.995,
+    "minimum_top_token_agreement": 0.95
+  },
+  "vocabulary_size": null
+}
