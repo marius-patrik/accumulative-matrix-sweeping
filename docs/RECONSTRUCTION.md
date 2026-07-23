@@ -305,6 +305,19 @@ The reconstruction branch currently contains:
   output and cache prefixes. Evidence in
   `docs/evidence/glm47_two_layer_native_differential.json` remains `blocked` only because executing
   two of 47 base layers is not a complete-model teacher-forced qualification.
+- a complete authenticated BF16 native/reference differential. All 48 source shards are bound to
+  the exact 40-character revision and independently full-hashed before the streaming reference and
+  again during native admission. The binding contains all 9,703 indexed tensors; the 47 base layers
+  execute while MTP layer 47 remains admitted but explicitly non-executed. The Transformers
+  reference materializes at most one layer's 1,270,622,976-byte tensor payload, publishes atomic
+  32,768-byte BF16 layer checkpoints, and does not materialize the 62,444,175,504-byte model. A
+  fresh eight-position run stayed below a 2.85 GB observed process working set. The native runtime
+  uses 7,700,480 bytes of KV cache, 2,839,888 bytes of scratch, and 10,043,392 bytes of bounded
+  diagnostic output. Its hidden states reached 0.999962957850467 cosine similarity and
+  0.00928256445336389 normalized RMS error against pinned Transformers BF16; all eight
+  full-vocabulary top tokens agreed. `docs/evidence/glm47_complete_bf16_differential.json` is
+  `passed` with no blockers. A validated checkpoint can resume interrupted reference work, but final
+  evidence is authoritative only when its output also matches a fresh run.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and

@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ams.local/schemas/glm4-model-differential.schema.json",
+  "title": "AMS Complete GLM-4.7 Native Model Differential Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "status",
+    "source",
+    "input",
+    "reference",
+    "candidate",
+    "sample_count",
+    "hidden_size",
+    "vocabulary_size",
+    "metrics",
+    "gates",
+    "reference_observation_hash",
+    "candidate_observation_hash",
+    "thresholds",
+    "blockers",
+    "native_execution",
+    "teacher_forced",
+    "resources"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "ams.glm47-model-differential.v1"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed",
+        "blocked"
+      ]
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "input": {
+      "$ref": "#/$defs/input"
+    },
+    "reference": {
+      "$ref": "#/$defs/observation"
+    },
+    "candidate": {
+      "$ref": "#/$defs/observation"
+    },
+    "sample_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8
+    },
+    "hidden_size": {
+      "const": 2048
+    },
+    "vocabulary_size": {
+      "const": 154880
+    },
+    "metrics": {
+      "$ref": "#/$defs/metrics"
+    },
+    "gates": {
+      "$ref": "#/$defs/gates"
+    },
+    "reference_observation_hash": {
+      "$ref": "#/$defs/digest"
+    },
+    "candidate_observation_hash": {
+      "$ref": "#/$defs/digest"
+    },
+    "thresholds": {
+      "$ref": "#/$defs/thresholds"
+    },
+    "blockers": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      }
+    },
+    "native_execution": {
+      "$ref": "#/$defs/native_execution"
+    },
+    "teacher_forced": {
+      "$ref": "#/$defs/teacher_forced"
+    },
+    "resources": {
+      "$ref": "#/$defs/resources"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "passed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "blockers": {
+            "maxItems": 0
+          },
+          "gates": {
+            "properties": {
+              "hidden_state_gate_passed": {
+                "const": true
+              },
+              "logit_gate_passed": {
+                "const": true
+              },
+              "complete_model_gate_passed": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object_id",
+        "content_hash",
+        "size_bytes"
+      ],
+      "properties": {
+        "object_id": {
+          "type": "string",
+          "pattern": "^hf:model-[0-9]{5}-of-00048\\.safetensors$"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "revision",
+        "architecture_hash",
+        "source_index_hash",
+        "source_root",
+        "shard_count",
+        "tensor_count",
+        "source_storage_bytes",
+        "storage",
+        "base_layer_count",
+        "mtp_layer_index",
+        "mtp_admitted_not_executed",
+        "full_hash_authenticated",
+        "teacher_forced_full_model"
+      ],
+      "properties": {
+        "repository": {
+          "const": "zai-org/GLM-4.7-Flash"
+        },
+        "revision": {
+          "const": "7dd20894a642a0aa287e9827cb1a1f7f91386b67"
+        },
+        "architecture_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "source_index_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "source_root": {
+          "$ref": "#/$defs/digest"
+        },
+        "shard_count": {
+          "const": 48
+        },
+        "tensor_count": {
+          "const": 9703
+        },
+        "source_storage_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "storage": {
+          "type": "array",
+          "minItems": 48,
+          "maxItems": 48,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/storage"
+          }
+        },
+        "base_layer_count": {
+          "const": 47
+        },
+        "mtp_layer_index": {
+          "const": 47
+        },
+        "mtp_admitted_not_executed": {
+          "const": true
+        },
+        "full_hash_authenticated": {
+          "const": true
+        },
+        "teacher_forced_full_model": {
+          "const": true
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_id",
+        "content_hash",
+        "sample_count",
+        "token_ids"
+      ],
+      "properties": {
+        "schema_id": {
+          "const": "ams.glm47-model-input.v1"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "token_ids": {
+          "$ref": "#/$defs/token_ids"
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_id",
+        "runtime_version",
+        "runtime_code_hash",
+        "observation_hash",
+        "hidden_state_hash",
+        "logits_hash"
+      ],
+      "properties": {
+        "runtime_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "runtime_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "runtime_code_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "observation_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "hidden_state_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "logits_hash": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hidden_cosine_similarity",
+        "hidden_normalized_rmse",
+        "top_token_agreement",
+        "route_agreement"
+      ],
+      "properties": {
+        "hidden_cosine_similarity": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "hidden_normalized_rmse": {
+          "type": "number",
+          "minimum": 0
+        },
+        "top_token_agreement": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "route_agreement": {
+          "type": "null"
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hidden_state_gate_passed",
+        "logit_gate_passed",
+        "complete_model_gate_passed",
+        "qualifies_precision_policy"
+      ],
+      "properties": {
+        "hidden_state_gate_passed": {
+          "type": "boolean"
+        },
+        "logit_gate_passed": {
+          "type": "boolean"
+        },
+        "complete_model_gate_passed": {
+          "type": "boolean"
+        },
+        "qualifies_precision_policy": {
+          "const": false
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_hidden_cosine_similarity",
+        "maximum_hidden_normalized_rmse",
+        "minimum_top_token_agreement"
+      ],
+      "properties": {
+        "minimum_hidden_cosine_similarity": {
+          "const": 0.995
+        },
+        "maximum_hidden_normalized_rmse": {
+          "const": 0.1
+        },
+        "minimum_top_token_agreement": {
+          "const": 0.95
+        }
+      }
+    },
+    "native_execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_hash",
+        "native_binary_hash",
+        "selected_token_ids",
+        "committed_cache_tokens",
+        "cache_heap_bytes",
+        "scratch_heap_bytes",
+        "raw_observation_bytes"
+      ],
+      "properties": {
+        "binding_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "native_binary_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "selected_token_ids": {
+          "$ref": "#/$defs/token_ids"
+        },
+        "committed_cache_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "cache_heap_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scratch_heap_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "raw_observation_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864
+        }
+      }
+    },
+    "teacher_forced": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_token_ids",
+        "reference_top_token_ids",
+        "candidate_top_token_ids"
+      ],
+      "properties": {
+        "input_token_ids": {
+          "$ref": "#/$defs/token_ids"
+        },
+        "reference_top_token_ids": {
+          "$ref": "#/$defs/token_ids"
+        },
+        "candidate_top_token_ids": {
+          "$ref": "#/$defs/token_ids"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "full_model_materialized",
+        "reference_streaming_layer_source_payload_bound_bytes",
+        "reference_checkpoint_tensor_bytes",
+        "torch_threads"
+      ],
+      "properties": {
+        "full_model_materialized": {
+          "const": false
+        },
+        "reference_streaming_layer_source_payload_bound_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reference_checkpoint_tensor_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "torch_threads": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      }
+    },
+    "token_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 154879
+      }
+    }
+  }
+}

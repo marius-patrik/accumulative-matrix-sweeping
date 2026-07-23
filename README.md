@@ -188,6 +188,20 @@ two layers are not a complete-model teacher-forced execution. Reproduce it with 
 ci/verify_glm4_official_layer_native.py <asset-root> <shard-1-path> <shard-2-path>
 <shard-47-path> <shard-48-path> <ams-runtime-binary> --samples 2`; exit status 2 records only that
 remaining full-model blocker.
+That final BF16 runtime blocker is now cleared independently. The complete verifier full-hashed all
+48 pinned source shards (62,444,175,504 file bytes), admitted all 9,703 indexed tensors, retained
+MTP as non-executed inventory, and executed all 47 base layers plus final normalization and the LM
+head through both a one-layer-at-a-time Transformers reference and the native release runtime. Across
+eight deterministic teacher-forced positions, native hidden states reached 0.9999630 cosine
+similarity and 0.0092826 normalized RMS error; all eight full-vocabulary top tokens agreed. Native
+execution used 7,700,480 bytes of KV cache and 2,839,888 bytes of scratch. The reference materialized
+at most one 1,270,622,976-byte layer payload at a time, wrote only 32,768-byte BF16 resume
+checkpoints, and remained below a 2.85 GB observed process working set on the qualification host.
+`docs/evidence/glm47_complete_bf16_differential.json` is `passed`, has no blockers, and remains
+non-qualifying for the later low-bit precision policy by design. Reproduce the fresh authority run
+with `python ci/verify_glm4_official_model_native.py <asset-root> <48-shard-root>
+<ams-runtime-binary>`; `--resume-reference` is an interruption-recovery optimization whose output
+must match a fresh run.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds
