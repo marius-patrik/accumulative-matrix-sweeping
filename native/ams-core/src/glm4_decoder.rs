@@ -268,7 +268,7 @@ mod tests {
         Glm4ModelReaders, Glm4ModelScratch, Glm4ModelVectorLayout, Glm4SparseLayerVectorLayout,
         GlmRouterPlan, GlmRouterScratch, IdentityDType, IdentityLinearPlan, KvCachePlan,
         LinearPlan, LinearScratch, RangeReader, SliceReader, SparseMoeBindings, SparseMoePlan,
-        SparseMoeScratch, glm4_greedy_advance, glm4_model_next_token,
+        SparseMoeScratch, glm4_greedy_advance, glm4_model_next_token, glm4_model_observe_token,
     };
 
     struct CountingReader {
@@ -665,6 +665,28 @@ mod tests {
         })
     }
 
+    fn run_model_observation(
+        plan: &Glm4ModelPlan,
+        readers: &Glm4ModelReaders<'_, '_, '_>,
+        caches: &mut [KvCache<'_>; 2],
+        position: usize,
+        input_token: usize,
+        hidden_output: &mut [f64],
+        logits_output: &mut [f64],
+    ) -> Result<usize, AmsError> {
+        with_model_scratch(|scratch| {
+            glm4_model_observe_token(
+                plan,
+                readers,
+                caches,
+                position,
+                input_token,
+                scratch,
+                (hidden_output, logits_output),
+            )
+        })
+    }
+
     fn advance_generation_fixture(
         plan: &Glm4ModelPlan,
         readers: &Glm4ModelReaders<'_, '_, '_>,
@@ -880,6 +902,8 @@ mod tests {
         let norm_reader = SliceReader::new(&norm);
         let correction_reader = SliceReader::new(&correction);
         let zero_reader = SliceReader::new(&zeros);
+        let observation_embedding_reader = CountingReader::new(embeddings.clone());
+        let observation_lm_head_reader = CountingReader::new(lm_head.clone());
         let embedding_reader = CountingReader::new(embeddings);
         let lm_head_reader = CountingReader::new(lm_head);
         let short_lm_head_reader = SliceReader::new(&short_lm_head);
@@ -971,6 +995,81 @@ mod tests {
             &norm_reader,
             &lm_head_reader,
         );
+
+        let (observation_dense, observation_sparse) = make_decoder_readers();
+        let observation_sparse_readers = [observation_sparse];
+        let observation_readers = Glm4ModelReaders::new(
+            &observation_embedding_reader,
+            Glm4DecoderReaders::new(observation_dense, &observation_sparse_readers),
+            &norm_reader,
+            &observation_lm_head_reader,
+        );
+        let mut short_hidden = [41.0f64; 1];
+        let mut observation_logits = [42.0f64; 3];
+        let error = run_model_observation(
+            &model,
+            &observation_readers,
+            &mut caches,
+            0,
+            1,
+            &mut short_hidden,
+            &mut observation_logits,
+        )
+        .err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::PlanInvalid));
+        assert_eq!(observation_embedding_reader.reads.get(), 0);
+        assert_eq!(observation_lm_head_reader.reads.get(), 0);
+        assert!(caches.iter().all(|cache| cache.committed_tokens() == 0));
+        assert_eq!(short_hidden.map(f64::to_bits), [41.0f64.to_bits()]);
+        assert_eq!(observation_logits.map(f64::to_bits), [42.0f64.to_bits(); 3]);
+
+        let mut observation_hidden = [41.0f64; 2];
+        let selected = run_model_observation(
+            &model,
+            &observation_readers,
+            &mut caches,
+            0,
+            1,
+            &mut observation_hidden,
+            &mut observation_logits,
+        )?;
+        assert_eq!(selected, 1);
+        assert_eq!(
+            observation_hidden.map(f64::to_bits),
+            [1.0f64.to_bits(), (-1.0f64).to_bits()]
+        );
+        assert_eq!(observation_logits[0].to_bits(), 0.0f64.to_bits());
+        assert!(observation_logits[2] > observation_logits[1]);
+        assert!(observation_logits[1] > observation_logits[0]);
+        assert!(caches.iter().all(|cache| cache.committed_tokens() == 1));
+        model.decoder().rollback(&mut caches, 0)?;
+        assert!(caches.iter().all(|cache| cache.committed_tokens() == 0));
+
+        let (observation_bad_dense, observation_bad_sparse) = make_decoder_readers();
+        let observation_bad_sparse_readers = [observation_bad_sparse];
+        let observation_bad_readers = Glm4ModelReaders::new(
+            &observation_embedding_reader,
+            Glm4DecoderReaders::new(observation_bad_dense, &observation_bad_sparse_readers),
+            &norm_reader,
+            &bad_lm_head_reader,
+        );
+        observation_hidden.fill(51.0);
+        observation_logits.fill(52.0);
+        let error = run_model_observation(
+            &model,
+            &observation_bad_readers,
+            &mut caches,
+            0,
+            1,
+            &mut observation_hidden,
+            &mut observation_logits,
+        )
+        .err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::NumericFailure));
+        assert!(caches.iter().all(|cache| cache.committed_tokens() == 0));
+        assert_eq!(observation_hidden.map(f64::to_bits), [51.0f64.to_bits(); 2]);
+        assert_eq!(observation_logits.map(f64::to_bits), [52.0f64.to_bits(); 3]);
+
         let mut session = Glm4GreedySession::new(&model, &prompt, &eos, 1)?;
         let error =
             advance_generation_fixture(&model, &readers, &mut caches, &mut session, true).err();

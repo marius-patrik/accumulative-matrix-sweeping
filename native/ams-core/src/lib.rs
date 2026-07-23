@@ -53,7 +53,7 @@ pub use glm4_mla::{
 };
 pub use glm4_model::{
     Glm4ModelPlan, Glm4ModelReaders, Glm4ModelScratch, Glm4ModelScratchRequirements,
-    Glm4ModelVectorLayout, glm4_model_cache_token, glm4_model_next_token,
+    Glm4ModelVectorLayout, glm4_model_cache_token, glm4_model_next_token, glm4_model_observe_token,
 };
 pub use glm4_package::{
     Glm4ArchitecturePlanSpec, Glm4AttentionDimensions, Glm4BindingEncoding, Glm4BindingRole,

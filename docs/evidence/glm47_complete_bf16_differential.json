@@ -1,0 +1,371 @@
+{
+  "blockers": [],
+  "candidate": {
+    "hidden_state_hash": "sha256:7a7b35a8d104d201b3851939a4364ca7ce33a12c3850d9ac79828ebf94bb41a9",
+    "logits_hash": "sha256:0f857e0dbb96675389c4867d2f407d761935e2d7e7d5cb1b494a7ac5da727a02",
+    "observation_hash": "sha256:927106fa2eeee8f011823a06245b1b2cb6570fea029edb854100e986b1f22c9c",
+    "runtime_code_hash": "sha256:9df828424f1e93082218e5b94d4a8caefbd1da472f9dc7074ed1e9a652eea995",
+    "runtime_id": "ams.core.glm47_complete_bf16",
+    "runtime_version": "ams/0.1.0.dev0;native/ams-runtime"
+  },
+  "candidate_observation_hash": "sha256:927106fa2eeee8f011823a06245b1b2cb6570fea029edb854100e986b1f22c9c",
+  "gates": {
+    "complete_model_gate_passed": true,
+    "hidden_state_gate_passed": true,
+    "logit_gate_passed": true,
+    "qualifies_precision_policy": false
+  },
+  "hidden_size": 2048,
+  "input": {
+    "content_hash": "sha256:985b12eccb2404dab4e8be326602ea2bbd7685fabf9541b9039c77cdcc5615bc",
+    "sample_count": 8,
+    "schema_id": "ams.glm47-model-input.v1",
+    "token_ids": [
+      117736,
+      67585,
+      17434,
+      122163,
+      72012,
+      21861,
+      126590,
+      76439
+    ]
+  },
+  "metrics": {
+    "hidden_cosine_similarity": 0.9999629578504667,
+    "hidden_normalized_rmse": 0.009282564453363888,
+    "route_agreement": null,
+    "top_token_agreement": 1.0
+  },
+  "native_execution": {
+    "binding_hash": "sha256:93f6ea0b048041e5d53c7263da16e8766bd366f8e7889df107492a9658405d4a",
+    "cache_heap_bytes": 7700480,
+    "committed_cache_tokens": 8,
+    "native_binary_hash": "sha256:9df828424f1e93082218e5b94d4a8caefbd1da472f9dc7074ed1e9a652eea995",
+    "raw_observation_bytes": 10043392,
+    "scratch_heap_bytes": 2839888,
+    "selected_token_ids": [
+      3422,
+      712,
+      198,
+      99381,
+      220,
+      220,
+      271,
+      271
+    ]
+  },
+  "reference": {
+    "hidden_state_hash": "sha256:8bd0c43f8ee8648e053e615c1fc307794c50506d63d57d08bef14c66987fef3b",
+    "logits_hash": "sha256:506475d92eafd2fee11845a20e3be5e8d9c74cad3cc5fe113c2e0256bf71c3a4",
+    "observation_hash": "sha256:51abe3fda04c0e1438c418eff1c6cba19de04d38ad66a1dd7a3cac62f4c4ceca",
+    "runtime_code_hash": "sha256:e9b6e8922a8b65a7d2fc9492b2a632e81e5c0c6085acb93dce3518457a697a88",
+    "runtime_id": "transformers.glm4_moe_lite.complete_streaming_bf16",
+    "runtime_version": "transformers/5.12.0;torch/2.13.0+cpu;safetensors/0.8.0"
+  },
+  "reference_observation_hash": "sha256:51abe3fda04c0e1438c418eff1c6cba19de04d38ad66a1dd7a3cac62f4c4ceca",
+  "resources": {
+    "full_model_materialized": false,
+    "reference_checkpoint_tensor_bytes": 32768,
+    "reference_streaming_layer_source_payload_bound_bytes": 1270622976,
+    "torch_threads": 8
+  },
+  "sample_count": 8,
+  "schema_id": "ams.glm47-model-differential.v1",
+  "source": {
+    "architecture_hash": "sha256:dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb",
+    "base_layer_count": 47,
+    "full_hash_authenticated": true,
+    "mtp_admitted_not_executed": true,
+    "mtp_layer_index": 47,
+    "repository": "zai-org/GLM-4.7-Flash",
+    "revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+    "shard_count": 48,
+    "source_index_hash": "sha256:91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791",
+    "source_root": "sha256:8bff00fd6d3d5b6066b0d16b8f89302ab003c7558b2ce639aeab641be77f8fec",
+    "source_storage_bytes": 62444175504,
+    "storage": [
+      {
+        "content_hash": "sha256:90abe0d075755853145c96906a1300f57c167fcc9aa67221239b448abf54933c",
+        "object_id": "hf:model-00001-of-00048.safetensors",
+        "size_bytes": 1438134344
+      },
+      {
+        "content_hash": "sha256:8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1",
+        "object_id": "hf:model-00002-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:ab6ebdd01af10c9bde1ec0b2a182d6f7ff8df831add6810695e5f3b50918040d",
+        "object_id": "hf:model-00003-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:932e4dbb8f7583d2b6392a6e850dd7aa05636827e8b90ff7858cae709838dca7",
+        "object_id": "hf:model-00004-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:7f56a3e52bf5905c2df07ef53575ae8e62622138a15b0affc2b3f84785ca81e9",
+        "object_id": "hf:model-00005-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:83aa0eeca6e5a9394bb8a1c9cab46cc603799d729cf64ed4bbc341e0a7085feb",
+        "object_id": "hf:model-00006-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:a9679076d3bd10c5f1287d12418fddb41c8b54b8c8ccc0672796ef7e8431b797",
+        "object_id": "hf:model-00007-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:7d1231577a057ff957d480c277e497910acbba75fc9232f8fd8f44c1a647d7a2",
+        "object_id": "hf:model-00008-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:095d626626773284535ba4114c2b320003ba3c8430bd104f5e7bba3772b2a1b1",
+        "object_id": "hf:model-00009-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:c3f8d197b0d253082f547d67989b1e3928a742b508f6f8d4abf119f3ba2990ed",
+        "object_id": "hf:model-00010-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:a8b7eeef625a6ed9ced479e064870f0ebf0da67056cd5e582300d0ebcf44de21",
+        "object_id": "hf:model-00011-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:49adb8b9f02d1643ab22406b0e05938ce3d7a8986fd0981e0af5d4cd47ee8b12",
+        "object_id": "hf:model-00012-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:f269382ae6ce42cd05937fcd5551e08da151c810a87bb0e1994ff9bb5f9eb7c9",
+        "object_id": "hf:model-00013-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:acd6f36aadceda658a5db6fc6a04160ae2ca1ae78d4a9c84aeabcea8e80b44c8",
+        "object_id": "hf:model-00014-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:606079fe1e000d658142c59fee66aa8d7c949d758612debd78d21cde2fae392c",
+        "object_id": "hf:model-00015-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:b53fb45f7689b505fc185180503ea9d45af67042ba38914e53bbdee97173c974",
+        "object_id": "hf:model-00016-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:a51e478badd50bb9b5299e3ad7979bfd40da8ab96983de0cd16a0fb5fddb4bc9",
+        "object_id": "hf:model-00017-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:680295c83f29a90c97f2d68c1290a152330c2dbd3654abdf0f074e6d8018062c",
+        "object_id": "hf:model-00018-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:355f9437e291b0846b5ecac1d644766ec17bd4863da441e4e786f33d7bac3347",
+        "object_id": "hf:model-00019-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:8f8d4698fc5ce834021254b407c61e5376a693dcafeb996a8fc708639b44aed8",
+        "object_id": "hf:model-00020-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:111570fc7f55bcb9beb7bcb969475b27ffbcad97b95788464ff91a1e07ff897a",
+        "object_id": "hf:model-00021-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:ced6a73df393df3bd559fc69093763fb5cc9fedee31e245a52a7786939199896",
+        "object_id": "hf:model-00022-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:b287bb0ce12a1ac975978c94548f2bbab3267e83e0c888871a3ada3ddf91405d",
+        "object_id": "hf:model-00023-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:c6e77476f0f57dc0386b64741d9251632d46e646faab6780d10a5a6a5f456668",
+        "object_id": "hf:model-00024-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:8f9e643d9d3e9152b9156424615c8054cffe6b8bc1b776567da17bbd3b97ebcb",
+        "object_id": "hf:model-00025-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:634da561277b9b77410a319bd930e940d443055fb688a2e4b9574aae1569192d",
+        "object_id": "hf:model-00026-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:3286537b5a5dd2b4742878476601a4f5b1f061e948386babe05076fd058fa5ec",
+        "object_id": "hf:model-00027-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:56335c906d44c1c6f37530d65182cd6af4fb146fa8a68e8e510d6419b5b007e7",
+        "object_id": "hf:model-00028-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:3e6591dfb36a59918f91c152ba0baf184b4372c667fe46f74024e5d8ae86f378",
+        "object_id": "hf:model-00029-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:62373b800980841e6ca5c4c48db570729246092d03ac756bdeb55ecfdd599a2c",
+        "object_id": "hf:model-00030-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:332d82cefb0b4d87c48e3e989c97d3e74b6f64326313694ed226a72bf26e3b99",
+        "object_id": "hf:model-00031-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:0f9897915eef55f41b221ff072d8b0b401e447007d648b63ddabf9b795361c18",
+        "object_id": "hf:model-00032-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:29059fb79e6fefaad49b7c2833370cd78079b403cc98bc28ce95976207840f7f",
+        "object_id": "hf:model-00033-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:f989cc8af19949a310599c5ab8d65f0ae8406908e1a702588b892604179061a1",
+        "object_id": "hf:model-00034-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:aaa91e9b1a075d1753e45a01db198ed48f2739392e46e1843a4dcaaab6cd02eb",
+        "object_id": "hf:model-00035-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:cf807da31533424a54196cd07da6caa1a22199b72d822bd8c2f387172b6e1c65",
+        "object_id": "hf:model-00036-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:887aeb5568ef6189a7618309e50f0277ad339da86133526ca6d820b88ecbb5d4",
+        "object_id": "hf:model-00037-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:036a38cc10858a8cc5a2fcd09fdab1b53258d04ff87dc4d3d21f140c54b029dd",
+        "object_id": "hf:model-00038-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:62ae341291fe720719ab6cdcf2348752f262f4575a3f8221b353deb224bcbd1d",
+        "object_id": "hf:model-00039-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:cd8af33462a3f7b4dbc5393da4016acffabafc20b826f952e912adb2a2845fe3",
+        "object_id": "hf:model-00040-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:39098c9b6770ff5c185a70b8f0d6cfca22f95e3c47dc38de88c3d2ec2b1cf5bc",
+        "object_id": "hf:model-00041-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:ffe0b23aab19b608ca59f46628064c3d53d846c81d6f978c2579b38e09e35747",
+        "object_id": "hf:model-00042-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:efe1da68f8c30d7e77a68d48eb7d65d28709f536062dba8168490370cca47ba4",
+        "object_id": "hf:model-00043-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:a731baa1370864ad61cf8fe8000cb8e1e266529206824a3ce96b5229eb3c53c8",
+        "object_id": "hf:model-00044-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:a636f872a931396d2fdc57b6c715294e14b3c8040420ffce856a2a0a18194916",
+        "object_id": "hf:model-00045-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:ba5365e31c27cd13e330a7135f7251f3bf16e99c8504acffa9e8190b585eb773",
+        "object_id": "hf:model-00046-of-00048.safetensors",
+        "size_bytes": 1270648328
+      },
+      {
+        "content_hash": "sha256:1bcc5d06065d2a564894657945ccfe9411762421c2c60acf91de31050cd4d84d",
+        "object_id": "hf:model-00047-of-00048.safetensors",
+        "size_bytes": 2539429936
+      },
+      {
+        "content_hash": "sha256:35fff90a30ca808d86dc24f9e3eda119832ab69fb1f88ae4cccfbf0e5ee409a1",
+        "object_id": "hf:model-00048-of-00048.safetensors",
+        "size_bytes": 1287438264
+      }
+    ],
+    "teacher_forced_full_model": true,
+    "tensor_count": 9703
+  },
+  "status": "passed",
+  "teacher_forced": {
+    "candidate_top_token_ids": [
+      3422,
+      712,
+      198,
+      99381,
+      220,
+      220,
+      271,
+      271
+    ],
+    "input_token_ids": [
+      117736,
+      67585,
+      17434,
+      122163,
+      72012,
+      21861,
+      126590,
+      76439
+    ],
+    "reference_top_token_ids": [
+      3422,
+      712,
+      198,
+      99381,
+      220,
+      220,
+      271,
+      271
+    ]
+  },
+  "thresholds": {
+    "maximum_hidden_normalized_rmse": 0.1,
+    "minimum_hidden_cosine_similarity": 0.995,
+    "minimum_top_token_agreement": 0.95
+  },
+  "vocabulary_size": 154880
+}

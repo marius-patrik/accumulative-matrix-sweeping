@@ -164,6 +164,46 @@ INT4 chunks totaling 5,013,504 bytes. A repeated run returned the same journal, 
 hashes without re-encoding published chunks. This is a tensor-slice milestone only; it deliberately
 publishes no model manifest. Exact results are in
 `docs/evidence/glm47_shard2_expert0_int4_conversion.json`.
+The same authenticated shard is now proven to contain all 206 tensors for official sparse decoder
+layer 1. A pinned Transformers 5.12.0 BF16 execution and the independent AMS Python semantic oracle
+ran two deterministic positions from that complete 1,270,648,128-byte source object. Expert routes
+agreed for both positions; the final hidden states reached 0.9999978 cosine similarity and 0.0020998
+normalized RMS error. The exact 2,539,429,936-byte shard 47 final normalization and LM head then
+projected both layer outputs through one identical pinned BF16 readout, reaching 100% top-token
+agreement. This clears all provisional numeric thresholds, but
+`docs/evidence/glm47_layer1_bf16_differential.json` remains deliberately blocked and
+non-qualifying: the candidate was not the native `ams-core` path, and an isolated final-head readout
+is not a complete-model teacher-forced execution. Reproduce the diagnostic with
+`pip install -e ".[official-layer]"` followed by `python ci/verify_glm4_official_layer.py
+<asset-root> <shard-2-path> --head-shard <shard-47-path> --samples 2`; exit status 2 means the
+recorded blockers remain, not that the authenticated numeric comparisons failed.
+A separate native differential now authenticates the exact pinned shards 1, 2, 47, and 48, binds
+the official embedding, dense layer 0, sparse layer 1, final normalization, and LM head directly to
+the release `ams-runtime`, and captures decoder hidden states and complete logits through
+`ams-core`. Against the same pinned Transformers BF16 implementation, its two deterministic
+positions reached 0.9999888 hidden-state cosine similarity, 0.0047871 normalized RMS error, and
+100% top-token agreement. `docs/evidence/glm47_two_layer_native_differential.json` therefore clears
+the native-observation blocker while remaining deliberately `blocked` and non-qualifying because
+two layers are not a complete-model teacher-forced execution. Reproduce it with `python
+ci/verify_glm4_official_layer_native.py <asset-root> <shard-1-path> <shard-2-path>
+<shard-47-path> <shard-48-path> <ams-runtime-binary> --samples 2`; exit status 2 records only that
+remaining full-model blocker.
+That final BF16 runtime blocker is now cleared independently. The complete verifier full-hashed all
+48 pinned source shards (62,444,175,504 file bytes), admitted all 9,703 indexed tensors, retained
+MTP as non-executed inventory, and executed all 47 base layers plus final normalization and the LM
+head through both a one-layer-at-a-time Transformers reference and the native release runtime. Across
+eight deterministic teacher-forced positions, native hidden states reached 0.9999630 cosine
+similarity and 0.0092826 normalized RMS error; all eight full-vocabulary top tokens agreed. Native
+execution used 7,700,480 bytes of KV cache and 2,839,888 bytes of scratch. The reference materialized
+at most one 1,270,622,976-byte layer payload at a time, wrote only 32,768-byte BF16 resume
+checkpoints, and remained below a 2.85 GB observed process working set on the qualification host.
+`docs/evidence/glm47_complete_bf16_differential.json` is `passed`, has no blockers, and remains
+non-qualifying for the later low-bit precision policy by design. Reproduce the fresh authority run
+with `python ci/verify_glm4_official_model_native.py <asset-root> <48-shard-root>
+<ams-runtime-binary>`; `--resume-reference` is an interruption-recovery optimization whose output
+must match a fresh run. Resume checkpoint schema v2 binds every checkpoint to the authenticated
+source root, canonical reference source/toolchain identity, and SHA-256 of the exact BF16 hidden
+payload; a corrupt newest checkpoint fails closed instead of falling back to an older layer.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds

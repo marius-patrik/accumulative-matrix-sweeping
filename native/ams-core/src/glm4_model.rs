@@ -405,16 +405,40 @@ pub fn glm4_model_cache_token(
     execute_model_decoder_token(plan, readers, caches, position, input_token, scratch)
 }
 
-/// Execute one autoregressive token and return the deterministic lowest-index argmax token.
-///
-/// The complete model is preflighted before the embedding read. Decoder caches remain committed only
-/// if final normalization, LM-head execution, and token selection also succeed.
-///
-/// # Errors
-///
-/// Returns a typed plan, capacity, storage, codec, or numeric error.
-#[allow(clippy::too_many_lines)]
-pub fn glm4_model_next_token(
+fn execute_model_tail(
+    plan: &Glm4ModelPlan,
+    readers: &Glm4ModelReaders<'_, '_, '_>,
+    scratch: &mut Glm4ModelScratch<'_>,
+) -> Result<usize, AmsError> {
+    let hidden = plan.scratch.hidden_elements;
+    let norm_weights = &mut scratch.norm_weights[..hidden];
+    read_identity_vector(
+        readers.final_norm,
+        plan.layout.final_norm_offset,
+        plan.layout.final_norm_dtype,
+        norm_weights,
+        scratch.vector_encoded,
+    )?;
+    let normalized = &mut scratch.normalized[..hidden];
+    glm_rms_norm(
+        &scratch.decoder_output[..hidden],
+        norm_weights,
+        plan.rms_norm_epsilon,
+        normalized,
+    )?;
+    let logits = &mut scratch.logits[..plan.model_vocabulary_size];
+    stream_linear(
+        readers.lm_head,
+        plan.lm_head,
+        normalized,
+        None,
+        &mut scratch.lm_head,
+        logits,
+    )?;
+    select_argmax(&logits[..plan.tokenizer_vocabulary_size])
+}
+
+fn execute_model_token_with_tail(
     plan: &Glm4ModelPlan,
     readers: &Glm4ModelReaders<'_, '_, '_>,
     caches: &mut [KvCache<'_>],
@@ -424,34 +448,7 @@ pub fn glm4_model_next_token(
 ) -> Result<usize, AmsError> {
     preflight_model_token(plan, readers, caches, position, input_token, scratch)?;
     execute_model_decoder_token(plan, readers, caches, position, input_token, scratch)?;
-    let hidden = plan.scratch.hidden_elements;
-    let tail = (|| -> Result<usize, AmsError> {
-        let norm_weights = &mut scratch.norm_weights[..hidden];
-        read_identity_vector(
-            readers.final_norm,
-            plan.layout.final_norm_offset,
-            plan.layout.final_norm_dtype,
-            norm_weights,
-            scratch.vector_encoded,
-        )?;
-        let normalized = &mut scratch.normalized[..hidden];
-        glm_rms_norm(
-            &scratch.decoder_output[..hidden],
-            norm_weights,
-            plan.rms_norm_epsilon,
-            normalized,
-        )?;
-        let logits = &mut scratch.logits[..plan.model_vocabulary_size];
-        stream_linear(
-            readers.lm_head,
-            plan.lm_head,
-            normalized,
-            None,
-            &mut scratch.lm_head,
-            logits,
-        )?;
-        select_argmax(&logits[..plan.tokenizer_vocabulary_size])
-    })();
+    let tail = execute_model_tail(plan, readers, scratch);
     match tail {
         Ok(token) => Ok(token),
         Err(error) => {
@@ -459,4 +456,57 @@ pub fn glm4_model_next_token(
             Err(error)
         }
     }
+}
+
+/// Execute one autoregressive token and return the deterministic lowest-index argmax token.
+///
+/// The complete model is preflighted before the embedding read. Decoder caches remain committed only
+/// if final normalization, LM-head execution, and token selection also succeed.
+///
+/// # Errors
+///
+/// Returns a typed plan, capacity, storage, codec, or numeric error.
+pub fn glm4_model_next_token(
+    plan: &Glm4ModelPlan,
+    readers: &Glm4ModelReaders<'_, '_, '_>,
+    caches: &mut [KvCache<'_>],
+    position: usize,
+    input_token: usize,
+    scratch: &mut Glm4ModelScratch<'_>,
+) -> Result<usize, AmsError> {
+    execute_model_token_with_tail(plan, readers, caches, position, input_token, scratch)
+}
+
+/// Execute one autoregressive token and copy its decoder hidden state and complete logits.
+///
+/// This is the diagnostic observation boundary for differential qualification. It shares the exact
+/// preflight, cache commit/rollback, final normalization, and LM-head path used by next-token
+/// selection. Caller-owned outputs remain untouched unless the complete transition succeeds.
+///
+/// # Errors
+///
+/// Returns a typed plan, capacity, output-shape, storage, codec, or numeric error.
+pub fn glm4_model_observe_token(
+    plan: &Glm4ModelPlan,
+    readers: &Glm4ModelReaders<'_, '_, '_>,
+    caches: &mut [KvCache<'_>],
+    position: usize,
+    input_token: usize,
+    scratch: &mut Glm4ModelScratch<'_>,
+    outputs: (&mut [f64], &mut [f64]),
+) -> Result<usize, AmsError> {
+    let (hidden_output, logits_output) = outputs;
+    if hidden_output.len() != plan.scratch.hidden_elements
+        || logits_output.len() != plan.model_vocabulary_size
+    {
+        return Err(AmsError::new(
+            ErrorCode::PlanInvalid,
+            "GLM-4 observation output dimensions differ from the model",
+        ));
+    }
+    let token =
+        execute_model_token_with_tail(plan, readers, caches, position, input_token, scratch)?;
+    hidden_output.copy_from_slice(&scratch.decoder_output[..plan.scratch.hidden_elements]);
+    logits_output.copy_from_slice(&scratch.logits[..plan.model_vocabulary_size]);
+    Ok(token)
 }

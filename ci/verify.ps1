@@ -33,7 +33,7 @@ try {
         try {
             python -m pytest -q `
                 tests/invariant/test_mini_glm4_forward.py `
-                -k "native_bridge_process or native_generation_process or native_worker_process"
+                -k "native_bridge_process or native_generation_process or native_observation_process or native_worker_process"
             python -m pytest -q tests/integration/test_glm4_native_backend.py
         }
         finally {
