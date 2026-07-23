@@ -12,6 +12,7 @@ from ams.codecs.int4 import (
     decode_int4_reference,
     encode_int4_group_reference,
     encode_int4_stream,
+    encode_int4_stream_numpy,
 )
 from ams.codecs.ternary import (
     TernaryCodecConfig,
@@ -36,6 +37,7 @@ __all__ = [
     "encode_int3_group_reference",
     "encode_int4_group_reference",
     "encode_int4_stream",
+    "encode_int4_stream_numpy",
     "encode_ternary_group_reference",
     "encode_ternary_stream",
 ]

@@ -618,12 +618,13 @@ class GlmPackageWeights(GlmWeightAccess):
         cls,
         package_root: Path,
         *,
+        manifest_uri: str = "manifest.json",
         linear_arena_bytes: int = 1024 * 1024,
         verification_buffer_bytes: int = 1024 * 1024,
         max_manifest_bytes: int = _MAX_MANIFEST_BYTES,
     ) -> GlmPackageWeights:
         root = resolve_package_root(package_root)
-        manifest_path = resolve_package_file(root, "manifest.json")
+        manifest_path = resolve_package_file(root, manifest_uri)
         manifest = _parse_manifest_payload(manifest_path, max_manifest_bytes)
         _exact_fields(
             manifest,

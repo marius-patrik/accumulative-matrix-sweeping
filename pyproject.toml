@@ -12,6 +12,9 @@ authors = [{ name = "AMS contributors" }]
 dependencies = []
 
 [project.optional-dependencies]
+conversion = [
+  "numpy==2.5.1",
+]
 official-layer = [
   "safetensors==0.8.0",
   "torch==2.13.0",

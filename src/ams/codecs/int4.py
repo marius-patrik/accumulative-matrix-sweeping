@@ -251,6 +251,157 @@ def encode_int4_stream(
     )
 
 
+def encode_int4_stream_numpy(
+    reader: RangeReader,
+    source: ByteRange,
+    shape: tuple[int, ...],
+    source_dtype: DType,
+    sink: BinarySink,
+    config: Int4CodecConfig | None = None,
+    *,
+    maximum_source_read_bytes: int = 8 * 1024 * 1024,
+) -> Int4EncodingResult:
+    """Encode exact v1 INT4 records in bounded NumPy blocks.
+
+    This is the bulk-conversion path. It preserves the scalar codec's FP64 division and
+    half-away-from-zero rounding while reading only a caller-bounded number of complete groups.
+    The scalar :func:`encode_int4_stream` remains the dependency-free conformance oracle.
+    """
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise AmsError(
+            ErrorCode.CAPABILITY_MISMATCH,
+            "bounded NumPy INT4 conversion requires the conversion extra",
+        ) from exc
+    config = config or Int4CodecConfig()
+    source_dtype = DType(source_dtype)
+    if source_dtype not in _SOURCE_ITEM_BYTES:
+        raise AmsError(
+            ErrorCode.CAPABILITY_MISMATCH,
+            f"INT4 source dtype is unsupported: {source_dtype.value}",
+        )
+    checked_positive(maximum_source_read_bytes, name="int4.maximum_source_read_bytes")
+    element_count = checked_product(shape, name="int4.shape")
+    checked_positive(element_count, name="int4.element_count")
+    item_bytes = _SOURCE_ITEM_BYTES[source_dtype]
+    decoded_bytes = checked_mul(element_count, item_bytes, name="int4.decoded_bytes")
+    if source.length != decoded_bytes:
+        raise AmsError(ErrorCode.PLAN_INVALID, "INT4 source range differs from shape and dtype")
+    source.validate_within(reader.size_bytes)
+    full_group_bytes = checked_mul(
+        config.group_size,
+        item_bytes,
+        name="int4.full_group_source_bytes",
+    )
+    if maximum_source_read_bytes < full_group_bytes:
+        raise AmsError(
+            ErrorCode.PLAN_INVALID,
+            "INT4 NumPy source-read bound cannot hold one complete group",
+        )
+    groups_per_read = maximum_source_read_bytes // full_group_bytes
+    block_elements = checked_mul(
+        groups_per_read,
+        config.group_size,
+        name="int4.block_elements",
+    )
+    block_bytes = checked_mul(block_elements, item_bytes, name="int4.block_source_bytes")
+    source_algorithm, source_expected = source.checksum.split(":", 1)
+    if source_algorithm not in hashlib.algorithms_available or source_algorithm == "blake3":
+        raise AmsError(
+            ErrorCode.CAPABILITY_MISMATCH,
+            f"source hash backend is unavailable: {source_algorithm}",
+        )
+    source_digest = hashlib.new(source_algorithm)
+    output_digest = hashlib.sha256()
+    source_buffer = bytearray(block_bytes)
+    source_view = memoryview(source_buffer)
+    encoded_bytes = 0
+    maximum_read = 0
+    try:
+        completed = 0
+        while completed < element_count:
+            remaining = element_count - completed
+            complete_groups = remaining // config.group_size
+            group_count = min(groups_per_read, complete_groups)
+            count = group_count * config.group_size if group_count else remaining
+            byte_count = checked_mul(count, item_bytes, name="int4.block_read_bytes")
+            window = source_view[:byte_count]
+            offset = checked_add(
+                source.offset,
+                checked_mul(completed, item_bytes, name="int4.source_progress"),
+                name="int4.source_offset",
+            )
+            reader.read_into(offset, window)
+            source_digest.update(window)
+            maximum_read = max(maximum_read, byte_count)
+            if group_count == 0:
+                encoded = encode_int4_group_reference(
+                    _decode_source_group(source_buffer, count, source_dtype),
+                    config,
+                )
+            else:
+                if source_dtype is DType.BFLOAT16:
+                    words = np.frombuffer(window, dtype="<u2", count=count)
+                    values = (words.astype("<u4") << np.uint32(16)).view("<f4")
+                elif source_dtype is DType.FLOAT16:
+                    values = np.frombuffer(window, dtype="<f2", count=count).astype("<f4")
+                else:
+                    values = np.frombuffer(window, dtype="<f4", count=count)
+                if not bool(np.isfinite(values).all()):
+                    raise AmsError(
+                        ErrorCode.NUMERIC_FAILURE,
+                        "INT4 source contains NaN or infinity",
+                    )
+                groups = values.reshape(group_count, config.group_size)
+                maxima = np.max(np.abs(groups), axis=1)
+                scales = (maxima.astype("<f8") / 7.0).astype("<f4")
+                scale_columns = scales.astype("<f8").reshape(group_count, 1)
+                ratios = np.zeros(groups.shape, dtype="<f8")
+                np.divide(
+                    np.abs(groups.astype("<f8")),
+                    scale_columns,
+                    out=ratios,
+                    where=scale_columns != 0.0,
+                )
+                magnitudes = np.minimum(7, np.floor(ratios + 0.5)).astype(np.int8)
+                quantized = np.where(groups < 0.0, -magnitudes, magnitudes).astype(np.int8)
+                nibbles = np.bitwise_and(quantized.astype(np.uint8), np.uint8(0x0F))
+                packed = np.zeros(
+                    (group_count, (config.group_size + 1) // 2),
+                    dtype=np.uint8,
+                )
+                packed[:, : nibbles[:, 0::2].shape[1]] = nibbles[:, 0::2]
+                packed[:, : nibbles[:, 1::2].shape[1]] |= nibbles[:, 1::2] << np.uint8(4)
+                records = np.empty(
+                    (group_count, config.group_record_size(config.group_size)),
+                    dtype=np.uint8,
+                )
+                records[:, :_SCALE_BYTES] = scales.view(np.uint8).reshape(
+                    group_count,
+                    _SCALE_BYTES,
+                )
+                records[:, _SCALE_BYTES:] = packed
+                encoded = records.tobytes(order="C")
+            encoded_bytes += _write_exact(sink, encoded, output_digest)
+            completed += count
+    finally:
+        source_view.release()
+    if source_digest.hexdigest() != source_expected:
+        raise AmsError(ErrorCode.INTEGRITY_FAILURE, "INT4 source range hash mismatch")
+    if encoded_bytes != config.encoded_size(element_count):
+        raise AmsError(ErrorCode.INTERNAL_INVARIANT, "INT4 encoded byte count is inconsistent")
+    return Int4EncodingResult(
+        content_hash="sha256:" + output_digest.hexdigest(),
+        source_checksum=source.checksum,
+        element_count=element_count,
+        group_count=(element_count + config.group_size - 1) // config.group_size,
+        encoded_bytes=encoded_bytes,
+        decoded_bytes=decoded_bytes,
+        maximum_source_read_bytes=maximum_read,
+    )
+
+
 def _signed_nibble(value: int) -> int:
     return value - 16 if value >= 8 else value
 

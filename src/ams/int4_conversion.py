@@ -245,6 +245,7 @@ def publish_int4_chunk_atomic(
     destination_root: Path,
     *,
     verification_buffer_bytes: int = 1024 * 1024,
+    stream_encoder=encode_int4_stream,
 ) -> Int4Publication:
     """Encode or recover one INT4 chunk without rereading a completed transform."""
     if verification_buffer_bytes <= 0:
@@ -326,7 +327,7 @@ def publish_int4_chunk_atomic(
 
     try:
         with staging_path.open("wb", buffering=0) as handle:
-            result = encode_int4_stream(
+            result = stream_encoder(
                 reader,
                 spec.source,
                 spec.shape,

@@ -282,6 +282,7 @@ def _build_huggingface_manifest(
     model_configuration: dict[str, Any],
     default_dtype: DType,
     licenses: tuple[str, ...],
+    storage_uri_prefix: str,
 ) -> dict[str, Any]:
     if not isinstance(architecture, str) or not 1 <= len(architecture) <= 512:
         raise AmsError(ErrorCode.INVALID_PACKAGE, "model architecture is invalid")
@@ -293,6 +294,15 @@ def _build_huggingface_manifest(
     for license_name in licenses:
         if not isinstance(license_name, str) or len(license_name) > 1024:
             raise AmsError(ErrorCode.INVALID_PACKAGE, "model license value is invalid")
+    _validate_relative_package_uri(
+        storage_uri_prefix,
+        field="manifest.storage_uri_prefix",
+    )
+    if storage_uri_prefix.endswith("/"):
+        raise AmsError(
+            ErrorCode.INVALID_PACKAGE,
+            "manifest storage URI prefix must not end with a separator",
+        )
 
     storage_by_hash: dict[str, dict[str, Any]] = {}
     tensors: list[dict[str, Any]] = []
@@ -324,7 +334,7 @@ def _build_huggingface_manifest(
             raise AmsError(ErrorCode.INTERNAL_INVARIANT, "unknown manifest tensor encoding")
         algorithm, hexdigest = published_tensor.target_hash.split(":", 1)
         object_id = f"object:{hexdigest}"
-        chunk_uri = f"chunks/{algorithm}-{hexdigest}.bin"
+        chunk_uri = f"{storage_uri_prefix}/{algorithm}-{hexdigest}.bin"
         existing = storage_by_hash.get(published_tensor.target_hash)
         if existing is not None and existing["size_bytes"] != published_tensor.encoded_bytes:
             raise AmsError(ErrorCode.INTERNAL_INVARIANT, "content hash has conflicting sizes")
@@ -476,6 +486,7 @@ def build_huggingface_identity_manifest(
     model_configuration: dict[str, Any],
     default_dtype: DType,
     licenses: tuple[str, ...] = (),
+    storage_uri_prefix: str = "chunks",
 ) -> dict[str, Any]:
     """Build a schema-shaped identity manifest after every chunk is published."""
     return _build_huggingface_manifest(
@@ -487,6 +498,7 @@ def build_huggingface_identity_manifest(
         model_configuration=model_configuration,
         default_dtype=default_dtype,
         licenses=licenses,
+        storage_uri_prefix=storage_uri_prefix,
     )
 
 
@@ -500,6 +512,7 @@ def build_huggingface_mixed_manifest(
     model_configuration: dict[str, Any],
     default_dtype: DType,
     licenses: tuple[str, ...] = (),
+    storage_uri_prefix: str = "chunks",
 ) -> dict[str, Any]:
     """Build one manifest containing explicit identity, ternary, and INT4 layouts."""
     return _build_huggingface_manifest(
@@ -511,6 +524,7 @@ def build_huggingface_mixed_manifest(
         model_configuration=model_configuration,
         default_dtype=default_dtype,
         licenses=licenses,
+        storage_uri_prefix=storage_uri_prefix,
     )
 
 
@@ -566,6 +580,7 @@ def publish_manifest_last(
     package_root: Path,
     manifest: dict[str, Any],
     *,
+    manifest_uri: str = _MANIFEST_NAME,
     buffer_bytes: int = 1024 * 1024,
     max_manifest_bytes: int = _MAX_MANIFEST_BYTES,
 ) -> Path:
@@ -638,8 +653,30 @@ def publish_manifest_last(
     payload = canonical_json_bytes(manifest)
     if len(payload) > max_manifest_bytes:
         raise AmsError(ErrorCode.TRANSACTION_FAILURE, "manifest exceeds its size limit")
-    final_path = root / _MANIFEST_NAME
-    temporary = root / f"{_MANIFEST_NAME}.tmp"
+    _validate_relative_package_uri(manifest_uri, field="manifest.uri")
+    current = root
+    try:
+        for part in Path(manifest_uri).parts[:-1]:
+            current /= part
+            if current.exists():
+                if current.is_symlink() or not current.is_dir():
+                    raise AmsError(
+                        ErrorCode.INVALID_PACKAGE,
+                        "manifest publication path contains a non-directory or symlink",
+                    )
+            else:
+                current.mkdir()
+        final_path = current / Path(manifest_uri).name
+        final_path.resolve(strict=False).relative_to(root)
+    except AmsError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise AmsError(
+            ErrorCode.IO_FAILURE,
+            "manifest publication path could not be prepared",
+            retriable=True,
+        ) from exc
+    temporary = final_path.with_name(final_path.name + ".tmp")
     if final_path.exists():
         try:
             if final_path.is_symlink() or not final_path.is_file():

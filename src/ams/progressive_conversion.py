@@ -13,6 +13,7 @@ from typing import Any
 
 from ams.canonical import canonical_json_bytes
 from ams.checked import checked_positive, checked_product
+from ams.codecs import encode_int4_stream
 from ams.conversion import ConversionItem, ConversionPlan
 from ams.descriptors import (
     ByteRange,
@@ -535,6 +536,7 @@ def _publish_tensor(
     source_checksum: str,
     *,
     buffer_bytes: int,
+    int4_stream_encoder,
 ) -> tuple[str, int]:
     source_range = ByteRange(
         planned.tensor.object_id,
@@ -581,6 +583,7 @@ def _publish_tensor(
             ),
             destination_root,
             verification_buffer_bytes=buffer_bytes,
+            stream_encoder=int4_stream_encoder,
         )
         return publication.target_hash, publication.encoded_bytes
     raise AmsError(ErrorCode.INTERNAL_INVARIANT, "progressive tensor encoding is unknown")
@@ -594,6 +597,7 @@ def execute_progressive_huggingface_mixed_conversion(
     cache_root: Path,
     *,
     buffer_bytes: int = 1024 * 1024,
+    int4_stream_encoder=encode_int4_stream,
 ) -> ProgressiveConversionSnapshot:
     """Verify, convert, and release one source shard at a time with durable progress."""
     checked_positive(buffer_bytes, name="progressive.buffer_bytes")
@@ -675,6 +679,7 @@ def execute_progressive_huggingface_mixed_conversion(
                 destination,
                 source_checksum,
                 buffer_bytes=buffer_bytes,
+                int4_stream_encoder=int4_stream_encoder,
             )
             store.mark_tensor_published(
                 plan,

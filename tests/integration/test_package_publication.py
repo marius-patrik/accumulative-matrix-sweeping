@@ -121,6 +121,55 @@ def test_manifest_is_schema_valid_deterministic_and_published_last(tmp_path: Pat
     assert publish_manifest_last(package_root, manifest, buffer_bytes=5) == manifest_path
 
 
+def test_registry_manifest_resolves_shared_cas_without_duplicate_package_chunks(
+    tmp_path: Path,
+) -> None:
+    catalog, plan, journal, graph, package_root = prepare_conversion(tmp_path)
+    store_root = tmp_path / "model-store"
+    cas_root = store_root / "cas"
+    cas_root.mkdir(parents=True)
+    (package_root / "chunks").replace(cas_root / "chunks")
+    graph_payload = (package_root / graph.uri).read_bytes()
+    graph_uri = "manifests/glm47-int4/graph/ir.json"
+    graph_path = store_root / graph_uri
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_bytes(graph_payload)
+    registry_graph = GraphArtifact(
+        uri=graph_uri,
+        size_bytes=len(graph_payload),
+        content_hash=digest(graph_payload),
+        ir_version=graph.ir_version,
+        entry_points=graph.entry_points,
+        required_operators=graph.required_operators,
+    )
+    manifest = build_huggingface_identity_manifest(
+        catalog,
+        plan,
+        journal,
+        registry_graph,
+        architecture="SyntheticDecoder",
+        model_configuration={"hidden_size": 4, "num_hidden_layers": 1},
+        default_dtype=DType.FLOAT32,
+        licenses=("test-only",),
+        storage_uri_prefix="cas/chunks",
+    )
+    manifest_uri = "manifests/glm47-int4/manifest.json"
+
+    published = publish_manifest_last(
+        store_root,
+        manifest,
+        manifest_uri=manifest_uri,
+        buffer_bytes=7,
+    )
+
+    assert published == store_root / manifest_uri
+    assert all(
+        storage["uri"].startswith(("cas/chunks/", "manifests/glm47-int4/graph/"))
+        for storage in manifest["storage_objects"]
+    )
+    assert not (store_root / "chunks").exists()
+
+
 def test_corrupt_chunk_prevents_manifest_visibility(tmp_path: Path) -> None:
     catalog, plan, journal, graph, package_root = prepare_conversion(tmp_path)
     manifest = build_manifest(catalog, plan, journal, graph)
