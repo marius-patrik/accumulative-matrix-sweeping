@@ -197,6 +197,23 @@ The reconstruction branch currently contains:
   union, rejects reserved codes/padding, and matches both the single-group and multi-group Python
   fixtures. This remains experimental and opt-in: hardware-optimized execution and quality
   qualification remain required before a GLM precision policy may select it.
+- a deterministic, metadata-only GLM-4 mixed-precision candidate builder and a separate fail-closed
+  quality gate. The first candidate preserves embeddings, routers, correction biases, and every norm
+  vector exactly; assigns the 9,024 routed-expert matrices to grouped trit5 ternary; and assigns 387
+  remaining rank-2 compute matrices to grouped symmetric INT4. On the exact pinned GLM-4.7-Flash
+  revision with group size 128, 292 tensors remain identity encoded and the estimated tensor payload is
+  9,100,218,112 bytes versus 62,442,983,168 source bytes (6.8617x smaller). Its candidate hash is
+  `sha256:3c9c4d9985986f40ea1c04860729c93dd900bbd9f5256558cc0e991cf8dcc0ba` and policy hash is
+  `sha256:b954d6e6f55551919d6cfc38eb6d7738bfb21e5530144f1ac6e6d7af06df6717`.
+  These values were reproduced by range-reading only 1,192,336 prefix/header bytes with
+  `ci/audit_glm4_precision.py` and recorded in
+  `docs/evidence/glm47_precision_candidate.json`; they are a structural storage estimate, not
+  conversion, integrity, memory, speed, or quality evidence. A candidate can become qualified only
+  through evidence that
+  identifies the exact source/candidate, calibration and evaluation corpora, evaluator, trusted
+  baseline, and candidate runtime, and clears every explicitly supplied token-count, task-count, NLL,
+  token-agreement, and task-retention threshold. The repository intentionally supplies no default
+  quality thresholds before a real baseline run.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -294,9 +311,15 @@ The reconstruction branch currently contains:
   unique EOS IDs, linear arena, and independent BF16/FP32 K/V dtypes while deriving exact cache bytes
   per layer and across the decoder stack. Its semantic hash is relocation-stable because local
   absolute paths are excluded, while the executable descriptor still carries those reviewed paths
-  and object hashes. Construction performs zero weight payload reads. The remaining native wrapper
-  must verify each object hash before ranges are served and construct the borrow-scoped Rust readers,
-  plans, caches, and scratch; this descriptor alone is not model execution.
+  and object hashes. Construction performs zero weight payload reads. The Rust core now independently
+  accepts the normalized base-model tensor specs, revalidates every role/layer/expert, exact shape,
+  codec byte count, object range, architecture, and runtime policy, and constructs the complete
+  dense/sparse decoder plus model plan. Its borrow-scoped callback assembles the exact reader topology
+  only after registry count and object lengths match, avoiding self-referential ownership; malformed
+  inventory, transposition, vector low-bit storage, codec length, and registry drift fail before
+  execution. The remaining native wrapper must translate the Python descriptor without weakening
+  either validator, verify each complete object hash before ranges are served, and own the fixed
+  caches and scratch. Neither metadata-only construction path is model execution.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal

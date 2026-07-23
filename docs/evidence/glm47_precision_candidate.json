@@ -1,0 +1,22 @@
+{
+  "architecture_hash": "sha256:dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb",
+  "candidate_hash": "sha256:3c9c4d9985986f40ea1c04860729c93dd900bbd9f5256558cc0e991cf8dcc0ba",
+  "compression_ratio": 6.8617018185157095,
+  "encoding_counts": {
+    "identity": 292,
+    "int4_symmetric": 387,
+    "ternary_trit5": 9024
+  },
+  "estimated_encoded_bytes": 9100218112,
+  "group_size": 128,
+  "header_bytes_read": 1192336,
+  "int4_config_hash": "sha256:3f79c72ebff39734ec3d34b3b0d0551e5c7569c657fb6579ef4f9acf4cabb881",
+  "policy_hash": "sha256:b954d6e6f55551919d6cfc38eb6d7738bfb21e5530144f1ac6e6d7af06df6717",
+  "repository": "zai-org/GLM-4.7-Flash",
+  "revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+  "source_bytes": 62442983168,
+  "source_index_hash": "sha256:91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791",
+  "status": "experimental",
+  "ternary_config_hash": "sha256:1dc19a60253d029e748a1d652baaa61f66716e9241a2e2ad779412fdf1a6c5d3",
+  "tensor_count": 9703
+}

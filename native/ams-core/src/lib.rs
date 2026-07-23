@@ -15,6 +15,7 @@ mod glm4_dense_layer;
 mod glm4_generation;
 mod glm4_mla;
 mod glm4_model;
+mod glm4_package;
 mod glm4_sparse_layer;
 mod identity;
 mod int4;
@@ -53,6 +54,11 @@ pub use glm4_mla::{
 pub use glm4_model::{
     Glm4ModelPlan, Glm4ModelReaders, Glm4ModelScratch, Glm4ModelScratchRequirements,
     Glm4ModelVectorLayout, glm4_model_cache_token, glm4_model_next_token,
+};
+pub use glm4_package::{
+    Glm4ArchitecturePlanSpec, Glm4AttentionDimensions, Glm4BindingEncoding, Glm4BindingRole,
+    Glm4BindingShape, Glm4BoundModelPlan, Glm4ExpertPolicy, Glm4ModelDimensions,
+    Glm4RuntimePlanSpec, Glm4TensorBindingSpec,
 };
 pub use glm4_sparse_layer::{
     Glm4SparseLayerPlan, Glm4SparseLayerReaders, Glm4SparseLayerScratch,

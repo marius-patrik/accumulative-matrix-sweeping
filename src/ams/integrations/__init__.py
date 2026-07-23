@@ -10,6 +10,15 @@ from ams.integrations.glm4_moe_lite import (
     parse_glm4_moe_lite_architecture,
     validate_glm4_moe_lite_tensor_inventory,
 )
+from ams.integrations.glm4_precision import (
+    Glm4PrecisionCandidate,
+    Glm4PrecisionCandidateStatus,
+    Glm4PrecisionQualityEvidence,
+    Glm4PrecisionQualityThresholds,
+    Glm4QualifiedPrecisionPolicy,
+    build_experimental_glm4_precision_candidate,
+    qualify_glm4_precision_candidate,
+)
 from ams.integrations.glm4_tokenizer import (
     OFFICIAL_GLM4_TOKENIZER_POLICY,
     Glm4AddedToken,
@@ -79,6 +88,11 @@ __all__ = [
     "Glm4MoeLiteTensorInventory",
     "Glm4MoeLiteTensorRole",
     "Glm4MoeLiteTensorSlot",
+    "Glm4PrecisionCandidate",
+    "Glm4PrecisionCandidateStatus",
+    "Glm4PrecisionQualityEvidence",
+    "Glm4PrecisionQualityThresholds",
+    "Glm4QualifiedPrecisionPolicy",
     "Glm4TokenizerAssets",
     "Glm4TokenizerFile",
     "Glm4TokenizerPolicy",
@@ -113,6 +127,7 @@ __all__ = [
     "StagedHuggingFaceShard",
     "admit_glm4_tokenizer_assets",
     "audit_huggingface_headers",
+    "build_experimental_glm4_precision_candidate",
     "build_huggingface_catalog",
     "build_huggingface_header_catalog",
     "build_huggingface_identity_plan",
@@ -126,6 +141,7 @@ __all__ = [
     "parse_glm_moe_dsa_architecture",
     "parse_huggingface_shard_index",
     "parse_safetensors_header",
+    "qualify_glm4_precision_candidate",
     "release_huggingface_shard",
     "release_huggingface_shard_source",
     "stage_huggingface_shard",

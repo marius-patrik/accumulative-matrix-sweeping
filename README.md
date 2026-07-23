@@ -110,7 +110,16 @@ carries dtype/codec/layer/expert/MTP metadata, admits only native-compatible ide
 hashes package plus runtime policy without hashing machine-local paths. Context, tokenizer, EOS,
 BF16/FP32 cache, linear-arena, and exact per-layer/total KV byte limits are explicit. Descriptor
 construction reads no tensor payload; a native reader registry that verifies each declared object
-hash and constructs the Rust plans is still required before this becomes model-backed serving.
+hash is still required before this becomes model-backed serving. The Rust core now independently
+revalidates normalized base-model bindings and constructs the complete dense/sparse decoder, model
+plan, and borrow-scoped reader topology without reading weights; the wrapper that translates the
+descriptor, verifies objects, and owns fixed caches/scratch remains open.
+The first deterministic GLM-4.7 precision candidate keeps embeddings, routers, norms, and correction
+biases exact, assigns routed-expert matrices to grouped ternary, and assigns other rank-2 compute
+matrices to symmetric INT4. A complete header-only audit estimates 9,100,218,112 encoded tensor bytes
+from 62,442,983,168 source bytes, but the candidate remains experimental: it has not been converted,
+executed, or quality-qualified. Qualification requires exact corpus, evaluator, baseline, runtime,
+sample-count, NLL, token-agreement, and task-retention evidence against caller-supplied thresholds.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds
@@ -156,7 +165,8 @@ expert tensor. Deterministic scalar oracles now pin GLM normalization, both rota
 top-k/tie behavior, stable activations, and noaux_tc expert routing; model weight shards have not been
 downloaded. The separately pinned GLM-4.7-Flash bring-up model now passes its own exact 9,703-name
 GLM-4-MoE-Lite inventory, including 47 inference layers and a distinct MTP layer; its anomalous
-provider `total_size` remains fail-closed pending shard-header reconciliation. A batch-one miniature
+provider `total_size` is admitted as an element count only for the exact pinned index hash after all
+48 shard headers proved the interpretation. A batch-one miniature
 prefill composes those operators through dense and sparse layers,
 IndexShare, routed and shared experts, residuals, and logits while proving that an unselected expert is
 never fetched. The same forward pass now runs from a published 69-tensor AMS package with three selected
