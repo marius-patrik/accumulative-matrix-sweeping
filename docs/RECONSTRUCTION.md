@@ -138,12 +138,21 @@ The reconstruction branch currently contains:
   `5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e`.
 - a complete immutable GLM-5.2 source-header audit. It authenticates the pinned revision's 282 LFS
   names, sizes, and SHA-256 identities under one canonical inventory hash, then proves all 59,585
-  remote safetensors headers match the official index. It observed 753,329,940,480 elements,
+  remote safetensors headers match the official index and reviewed architecture shapes/dtypes. It
+  observed 753,329,940,480 elements,
   1,506,659,919,872 tensor bytes, 1,506,667,387,408 source-file bytes, 59,509 BF16 tensors, and 76
   FP32 tensors while reading 7,467,536 prefix/header bytes and zero tensor-payload bytes. The exact
   result is recorded in `docs/evidence/glm52_source_audit.json` with
   `qualifies_precision_policy = false`; expected LFS hashes are now complete, but payload integrity is
   established only as each shard is staged for conversion.
+- a deterministic metadata-only GLM-5.2 storage candidate bound to that exact source-audit hash. It
+  preserves 582 sensitive router/index/norm tensors exactly, assigns all 58,368 routed-expert
+  matrices to grouped trit5 ternary, and assigns the remaining 635 tensors to grouped symmetric INT4.
+  The estimated package payload is 182,650,058,752 bytes versus 1,506,659,919,872 source tensor bytes
+  (8.2489x smaller), leaving room for a single staged source shard within the observed disk envelope.
+  This is storage feasibility only: `docs/evidence/glm52_precision_candidate.json` fixes
+  `qualifies_precision_policy` to false, and the poor GLM-4.7 expert-ternary reconstruction result
+  prevents conversion until stronger low-bit alternatives are compared.
 - a separate fail-closed GLM-4-MoE-Lite architecture and checkpoint boundary. Its generated 9,703-name
   inventory exactly matches the pinned GLM-4.7-Flash index: one dense inference layer, 46 sparse
   inference layers, and a separately marked 212-tensor MTP layer, including its private embedding and

@@ -19,6 +19,7 @@ from ams.integrations import (
     build_huggingface_header_catalog,
     parse_glm_moe_dsa_architecture,
     parse_huggingface_shard_index,
+    validate_glm_tensor_catalog,
     validate_glm_tensor_inventory,
 )
 from ams.storage import HttpRangeReader
@@ -209,8 +210,7 @@ def _run(arguments: argparse.Namespace) -> dict[str, Any]:
             )
         )
     catalog = build_huggingface_header_catalog(index, tuple(sources))
-    if len(catalog.tensors) != len(inventory.slots):
-        raise AmsError(ErrorCode.INTERNAL_INVARIANT, "GLM-5.2 inventory changed after header audit")
+    validate_glm_tensor_catalog(architecture, inventory, catalog.tensors)
 
     asset_evidence = {
         name: {

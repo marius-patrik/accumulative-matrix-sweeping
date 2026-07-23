@@ -1,14 +1,19 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from ams.descriptors import DType
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
     GlmTensorRole,
+    HuggingFaceCatalogTensor,
+    expected_glm_tensor_shape,
     expected_glm_tensor_slots,
     parse_glm_moe_dsa_architecture,
     parse_huggingface_shard_index,
+    validate_glm_tensor_catalog,
     validate_glm_tensor_inventory,
 )
 
@@ -86,12 +91,75 @@ def test_tiny_glm_inventory_marks_sparse_experts_shared_index_and_mtp() -> None:
     mtp_slots = [slot for slot in slots if slot.mtp]
     assert len(mtp_slots) == 29
     assert {slot.layer_index for slot in mtp_slots} == {2}
+    slot_by_role = {slot.role: slot for slot in slots}
+    assert expected_glm_tensor_shape(architecture, slot_by_role[GlmTensorRole.EMBEDDING]) == (
+        32,
+        16,
+    )
+    assert expected_glm_tensor_shape(
+        architecture, slot_by_role[GlmTensorRole.ATTENTION_Q_B_PROJECTION]
+    ) == (8, 4)
+    assert expected_glm_tensor_shape(
+        architecture, slot_by_role[GlmTensorRole.INDEXER_WQ_B_PROJECTION]
+    ) == (8, 4)
+    assert expected_glm_tensor_shape(
+        architecture, slot_by_role[GlmTensorRole.ROUTED_EXPERT_DOWN_PROJECTION]
+    ) == (16, 8)
+    assert expected_glm_tensor_shape(
+        architecture, slot_by_role[GlmTensorRole.MTP_EMBED_HIDDEN_PROJECTION]
+    ) == (16, 32)
     inventory = validate_glm_tensor_inventory(
         architecture,
         index_for_names([slot.tensor_name for slot in slots]),
     )
     assert inventory.architecture_hash == architecture.content_hash
     assert len(inventory.slots) == len(slots)
+
+
+def test_tiny_glm_catalog_binds_every_shape_dtype_and_byte_length() -> None:
+    architecture = parse_config(tiny_glm_config())
+    slots = expected_glm_tensor_slots(architecture)
+    index = index_for_names([slot.tensor_name for slot in slots])
+    inventory = validate_glm_tensor_inventory(architecture, index)
+    tensors = []
+    offset = 8
+    for slot in slots:
+        shape = expected_glm_tensor_shape(architecture, slot)
+        is_f32 = slot.role is GlmTensorRole.ROUTER_CORRECTION_BIAS
+        length = 1
+        for dimension in shape:
+            length *= dimension
+        length *= 4 if is_f32 else 2
+        tensors.append(
+            HuggingFaceCatalogTensor(
+                tensor_name=slot.tensor_name,
+                shard_name="model-00001-of-00001.safetensors",
+                object_id="fixture:source",
+                dtype=DType.FLOAT32 if is_f32 else DType.BFLOAT16,
+                source_dtype="F32" if is_f32 else "BF16",
+                shape=shape,
+                source_offset=offset,
+                source_length=length,
+            )
+        )
+        offset += length
+    catalog = tuple(tensors)
+    validate_glm_tensor_catalog(architecture, inventory, catalog)
+
+    projection_index = next(
+        index
+        for index, tensor in enumerate(catalog)
+        if tensor.tensor_name.endswith("self_attn.q_a_proj.weight")
+    )
+    projection = catalog[projection_index]
+    transposed = (
+        *catalog[:projection_index],
+        replace(projection, shape=tuple(reversed(projection.shape))),
+        *catalog[projection_index + 1 :],
+    )
+    with pytest.raises(AmsError, match="shape, dtype, or byte length") as caught:
+        validate_glm_tensor_catalog(architecture, inventory, transposed)
+    assert caught.value.code is ErrorCode.CAPABILITY_MISMATCH
 
 
 def test_official_glm52_dimensions_imply_the_observed_59585_tensor_names() -> None:

@@ -9,9 +9,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from ams.checked import checked_positive
+from ams.checked import checked_mul, checked_positive, checked_product
+from ams.descriptors import DType
 from ams.errors import AmsError, ErrorCode
-from ams.integrations.huggingface import HuggingFaceShardIndex
+from ams.integrations.huggingface import HuggingFaceCatalogTensor, HuggingFaceShardIndex
 
 _MAX_CONFIG_BYTES = 1024 * 1024
 
@@ -328,6 +329,139 @@ class GlmTensorInventory:
     architecture_hash: str
     index_hash: str
     slots: tuple[GlmTensorSlot, ...]
+
+
+def expected_glm_tensor_shape(
+    architecture: GlmMoeDsaArchitecture,
+    slot: GlmTensorSlot,
+) -> tuple[int, ...]:
+    """Return the sole reviewed row-major shape for one GLM-MoE-DSA tensor slot."""
+
+    role = slot.role
+    hidden = architecture.hidden_size
+    shared_intermediate = architecture.moe_intermediate_size * architecture.n_shared_experts
+    if role in {GlmTensorRole.EMBEDDING, GlmTensorRole.LM_HEAD}:
+        return (architecture.vocab_size, hidden)
+    if role in {
+        GlmTensorRole.FINAL_NORM,
+        GlmTensorRole.INPUT_NORM,
+        GlmTensorRole.POST_ATTENTION_NORM,
+        GlmTensorRole.MTP_EMBED_NORM,
+        GlmTensorRole.MTP_HIDDEN_NORM,
+        GlmTensorRole.MTP_SHARED_HEAD_NORM,
+    }:
+        return (hidden,)
+    if role is GlmTensorRole.ATTENTION_Q_A_PROJECTION:
+        return (architecture.q_lora_rank, hidden)
+    if role is GlmTensorRole.ATTENTION_Q_A_NORM:
+        return (architecture.q_lora_rank,)
+    if role is GlmTensorRole.ATTENTION_Q_B_PROJECTION:
+        return (
+            architecture.num_attention_heads * architecture.qk_head_dim,
+            architecture.q_lora_rank,
+        )
+    if role is GlmTensorRole.ATTENTION_KV_A_PROJECTION:
+        return (architecture.kv_lora_rank + architecture.qk_rope_head_dim, hidden)
+    if role is GlmTensorRole.ATTENTION_KV_A_NORM:
+        return (architecture.kv_lora_rank,)
+    if role is GlmTensorRole.ATTENTION_KV_B_PROJECTION:
+        return (
+            architecture.num_attention_heads
+            * (architecture.qk_nope_head_dim + architecture.v_head_dim),
+            architecture.kv_lora_rank,
+        )
+    if role is GlmTensorRole.ATTENTION_OUTPUT_PROJECTION:
+        return (hidden, architecture.num_attention_heads * architecture.v_head_dim)
+    if role is GlmTensorRole.INDEXER_WQ_B_PROJECTION:
+        return (
+            architecture.index_n_heads * architecture.index_head_dim,
+            architecture.q_lora_rank,
+        )
+    if role is GlmTensorRole.INDEXER_WK_PROJECTION:
+        return (architecture.index_head_dim, hidden)
+    if role in {GlmTensorRole.INDEXER_K_NORM_WEIGHT, GlmTensorRole.INDEXER_K_NORM_BIAS}:
+        return (architecture.index_head_dim,)
+    if role is GlmTensorRole.INDEXER_WEIGHTS_PROJECTION:
+        return (architecture.index_n_heads, hidden)
+    if role in {GlmTensorRole.DENSE_GATE_PROJECTION, GlmTensorRole.DENSE_UP_PROJECTION}:
+        return (architecture.intermediate_size, hidden)
+    if role is GlmTensorRole.DENSE_DOWN_PROJECTION:
+        return (hidden, architecture.intermediate_size)
+    if role is GlmTensorRole.ROUTER_WEIGHT:
+        return (architecture.n_routed_experts, hidden)
+    if role is GlmTensorRole.ROUTER_CORRECTION_BIAS:
+        return (architecture.n_routed_experts,)
+    if role in {
+        GlmTensorRole.ROUTED_EXPERT_GATE_PROJECTION,
+        GlmTensorRole.ROUTED_EXPERT_UP_PROJECTION,
+    }:
+        return (architecture.moe_intermediate_size, hidden)
+    if role is GlmTensorRole.ROUTED_EXPERT_DOWN_PROJECTION:
+        return (hidden, architecture.moe_intermediate_size)
+    if role in {
+        GlmTensorRole.SHARED_EXPERT_GATE_PROJECTION,
+        GlmTensorRole.SHARED_EXPERT_UP_PROJECTION,
+    }:
+        return (shared_intermediate, hidden)
+    if role is GlmTensorRole.SHARED_EXPERT_DOWN_PROJECTION:
+        return (hidden, shared_intermediate)
+    if role is GlmTensorRole.MTP_EMBED_HIDDEN_PROJECTION:
+        return (hidden, hidden * 2)
+    raise AmsError(
+        ErrorCode.INTERNAL_INVARIANT,
+        "GLM tensor role has no reviewed shape",
+    )
+
+
+def validate_glm_tensor_catalog(
+    architecture: GlmMoeDsaArchitecture,
+    inventory: GlmTensorInventory,
+    tensors: tuple[HuggingFaceCatalogTensor, ...],
+) -> None:
+    """Bind every normalized source shape, dtype, and byte length to the reviewed graph."""
+
+    expected_slots = expected_glm_tensor_slots(architecture)
+    if (
+        inventory.architecture_hash != architecture.content_hash
+        or inventory.slots != expected_slots
+    ):
+        raise AmsError(
+            ErrorCode.CAPABILITY_MISMATCH,
+            "GLM tensor catalog inventory does not match the reviewed architecture",
+        )
+    tensor_by_name = {tensor.tensor_name: tensor for tensor in tensors}
+    if len(tensor_by_name) != len(tensors) or set(tensor_by_name) != {
+        slot.tensor_name for slot in expected_slots
+    }:
+        raise AmsError(
+            ErrorCode.CAPABILITY_MISMATCH,
+            "GLM tensor catalog does not match the reviewed inventory",
+        )
+    for slot in expected_slots:
+        tensor = tensor_by_name[slot.tensor_name]
+        expected_shape = expected_glm_tensor_shape(architecture, slot)
+        expected_dtype = (
+            DType.FLOAT32 if slot.role is GlmTensorRole.ROUTER_CORRECTION_BIAS else DType.BFLOAT16
+        )
+        expected_source_dtype = (
+            "F32" if slot.role is GlmTensorRole.ROUTER_CORRECTION_BIAS else "BF16"
+        )
+        item_bytes = 4 if expected_dtype is DType.FLOAT32 else 2
+        expected_bytes = checked_mul(
+            checked_product(expected_shape, name="glm_moe_dsa.tensor_elements"),
+            item_bytes,
+            name="glm_moe_dsa.tensor_bytes",
+        )
+        if (
+            tensor.shape != expected_shape
+            or tensor.dtype is not expected_dtype
+            or tensor.source_dtype != expected_source_dtype
+            or tensor.source_length != expected_bytes
+        ):
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                f"GLM tensor shape, dtype, or byte length is inconsistent: {slot.tensor_name}",
+            )
 
 
 def _add_layer_slots(

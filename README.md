@@ -190,7 +190,11 @@ fail-closed 59,585-name architecture inventory, including the separate MTP layer
 expert tensor. A reproducible audit authenticated the exact 282-shard LFS inventory and matched every
 remote safetensors header while reading only 7,467,536 structural bytes from the 1.506 TB source set;
 no weight payload was read or downloaded, and the evidence explicitly does not qualify a precision
-policy. Deterministic scalar oracles now pin GLM normalization, both rotary layouts, DSA causal
+policy. The first metadata-only storage candidate keeps 582 router/index/norm tensors exact, assigns
+58,368 routed-expert tensors to grouped ternary, and assigns the other 635 tensors to symmetric INT4.
+It estimates 182,650,058,752 encoded bytes (8.2489× smaller), which fits the observed disk envelope,
+but it remains an unconverted, unqualified feasibility candidate. Deterministic scalar oracles now
+pin GLM normalization, both rotary layouts, DSA causal
 top-k/tie behavior, stable activations, and noaux_tc expert routing. The separately pinned
 GLM-4.7-Flash bring-up model now passes its own exact 9,703-name
 GLM-4-MoE-Lite inventory, including 47 inference layers and a distinct MTP layer; its anomalous

@@ -41,9 +41,17 @@ from ams.integrations.glm_moe_dsa import (
     GlmTensorInventory,
     GlmTensorRole,
     GlmTensorSlot,
+    expected_glm_tensor_shape,
     expected_glm_tensor_slots,
     parse_glm_moe_dsa_architecture,
+    validate_glm_tensor_catalog,
     validate_glm_tensor_inventory,
+)
+from ams.integrations.glm_precision import (
+    GlmPrecisionCandidate,
+    GlmPrecisionCandidateStatus,
+    build_experimental_glm_precision_candidate,
+    experimental_glm_encoding_for_role,
 )
 from ams.integrations.huggingface import (
     HuggingFaceCatalog,
@@ -110,6 +118,8 @@ __all__ = [
     "Glm4TokenizerPolicy",
     "Glm4TokenizerRuntime",
     "GlmMoeDsaArchitecture",
+    "GlmPrecisionCandidate",
+    "GlmPrecisionCandidateStatus",
     "GlmTensorInventory",
     "GlmTensorRole",
     "GlmTensorSlot",
@@ -140,6 +150,7 @@ __all__ = [
     "admit_glm4_tokenizer_assets",
     "audit_huggingface_headers",
     "build_experimental_glm4_precision_candidate",
+    "build_experimental_glm_precision_candidate",
     "build_huggingface_catalog",
     "build_huggingface_header_catalog",
     "build_huggingface_identity_plan",
@@ -148,8 +159,10 @@ __all__ = [
     "build_huggingface_progressive_mixed_plan",
     "expected_glm4_moe_lite_tensor_shape",
     "expected_glm4_moe_lite_tensor_slots",
+    "expected_glm_tensor_shape",
     "expected_glm_tensor_slots",
     "experimental_glm4_encoding_for_role",
+    "experimental_glm_encoding_for_role",
     "parse_glm4_moe_lite_architecture",
     "parse_glm_moe_dsa_architecture",
     "parse_huggingface_shard_index",
@@ -160,6 +173,7 @@ __all__ = [
     "release_huggingface_shard_source",
     "stage_huggingface_shard",
     "validate_glm4_moe_lite_tensor_inventory",
+    "validate_glm_tensor_catalog",
     "validate_glm_tensor_inventory",
     "validate_huggingface_shard_cache_empty",
 ]
