@@ -285,11 +285,13 @@ The reconstruction branch currently contains:
   through the official `Glm4MoeLiteDecoderLayer` and the independent AMS Python composition over
   the same shard. Expert routes agreed exactly; hidden outputs reached 0.999997796175087 cosine
   similarity and 0.0020997596295421455 normalized RMS error, clearing the provisional 0.995/0.10
-  hidden-state thresholds. `docs/evidence/glm47_layer1_bf16_differential.json` is nevertheless
-  `blocked`, sets every qualification field false, and records why: no native `ams-core`
-  official-layer observation exists, and the absent layer-47/LM-head shard prevents the required
-  teacher-forced logit comparison. `ci/verify_glm4_official_layer.py` full-hashes the source,
-  rejects config/index/shard/toolchain drift, and exits 2 while either blocker remains.
+  hidden-state thresholds. The exact authenticated 2,539,429,936-byte shard 47 final normalization
+  and LM head projected both layer outputs through one identical pinned BF16 readout; all two
+  top-token selections agreed. `docs/evidence/glm47_layer1_bf16_differential.json` is nevertheless
+  `blocked` and non-qualifying: no native `ams-core` official-layer observation exists, and the
+  isolated readout is not a complete-model teacher-forced execution.
+  `ci/verify_glm4_official_layer.py` full-hashes both sources, rejects
+  config/index/shard/toolchain drift, and exits 2 while either blocker remains.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -461,7 +463,7 @@ The reconstruction branch currently contains:
   no real Froq coding task or production GLM-4.7/GLM-5.2 package has run yet.
 
 The automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, passes 247 ordinary Python tests with four expected native-binary skips, then builds
+Draft 2020-12, passes 248 ordinary Python tests with four expected native-binary skips, then builds
 `ams-runtime` and passes all four skipped native-process/model-backed cases. It also runs 58 core plus
 eight runtime Rust tests with `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,

@@ -17,6 +17,17 @@ def test_official_layer_evidence_is_authenticated_but_not_qualified() -> None:
             "sha256:dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb"
         ),
         "layer_index": 1,
+        "logit_readout": {
+            "final_norm_tensor": "model.norm.weight",
+            "kind": "isolated_final_norm_lm_head",
+            "lm_head_tensor": "lm_head.weight",
+            "shard_name": "model-00047-of-00048.safetensors",
+            "shard_sha256": (
+                "sha256:1bcc5d06065d2a564894657945ccfe9411762421c2c60acf91de31050cd4d84d"
+            ),
+            "shard_size_bytes": 2_539_429_936,
+            "teacher_forced_full_model": False,
+        },
         "repository": "zai-org/GLM-4.7-Flash",
         "revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
         "shard_name": "model-00002-of-00048.safetensors",
@@ -35,18 +46,14 @@ def test_official_layer_evidence_is_authenticated_but_not_qualified() -> None:
     assert evidence["metrics"]["hidden_cosine_similarity"] >= 0.995
     assert evidence["metrics"]["hidden_normalized_rmse"] <= 0.10
     assert evidence["metrics"]["route_agreement"] == 1.0
-    assert evidence["metrics"]["top_token_agreement"] is None
+    assert evidence["metrics"]["top_token_agreement"] == 1.0
     assert evidence["gates"] == {
-        "full_layer_gate_passed": False,
+        "full_layer_gate_passed": True,
         "hidden_state_gate_passed": True,
-        "logit_gate_passed": False,
+        "logit_gate_passed": True,
         "qualifies_precision_policy": False,
     }
     assert evidence["blockers"] == [
         "candidate runtime is the AMS Python semantic oracle, not native ams-core execution",
-        (
-            "official LM-head shard model-00047-of-00048.safetensors is absent; "
-            "teacher-forced logits were not produced"
-        ),
-        "teacher-forced logits are absent from both observations",
+        "isolated final-head readout is not a complete-model teacher-forced execution",
     ]

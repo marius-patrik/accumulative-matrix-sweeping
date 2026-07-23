@@ -168,13 +168,15 @@ The same authenticated shard is now proven to contain all 206 tensors for offici
 layer 1. A pinned Transformers 5.12.0 BF16 execution and the independent AMS Python semantic oracle
 ran two deterministic positions from that complete 1,270,648,128-byte source object. Expert routes
 agreed for both positions; the final hidden states reached 0.9999978 cosine similarity and 0.0020998
-normalized RMS error. This clears the provisional hidden-state thresholds, but
+normalized RMS error. The exact 2,539,429,936-byte shard 47 final normalization and LM head then
+projected both layer outputs through one identical pinned BF16 readout, reaching 100% top-token
+agreement. This clears all provisional numeric thresholds, but
 `docs/evidence/glm47_layer1_bf16_differential.json` remains deliberately blocked and
-non-qualifying: the candidate was not the native `ams-core` path, and shard 2 does not contain the
-LM head required for teacher-forced logit agreement. Reproduce the diagnostic with
-`pip install -e ".[official-layer]"` followed by
-`python ci/verify_glm4_official_layer.py <asset-root> <shard-2-path> --samples 2`; exit status 2
-means the recorded blockers remain, not that the authenticated hidden-state comparison failed.
+non-qualifying: the candidate was not the native `ams-core` path, and an isolated final-head readout
+is not a complete-model teacher-forced execution. Reproduce the diagnostic with
+`pip install -e ".[official-layer]"` followed by `python ci/verify_glm4_official_layer.py
+<asset-root> <shard-2-path> --head-shard <shard-47-path> --samples 2`; exit status 2 means the
+recorded blockers remain, not that the authenticated numeric comparisons failed.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds

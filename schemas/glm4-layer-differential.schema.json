@@ -111,7 +111,8 @@
         "shard_sha256",
         "shard_source_root",
         "tensor_count",
-        "tensor_payload_bytes"
+        "tensor_payload_bytes",
+        "logit_readout"
       ],
       "properties": {
         "repository": {
@@ -155,6 +156,48 @@
         "tensor_payload_bytes": {
           "type": "integer",
           "minimum": 1
+        },
+        "logit_readout": {
+          "$ref": "#/$defs/logit_readout"
+        }
+      }
+    },
+    "logit_readout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "shard_name",
+        "shard_size_bytes",
+        "shard_sha256",
+        "final_norm_tensor",
+        "lm_head_tensor",
+        "teacher_forced_full_model"
+      ],
+      "properties": {
+        "kind": {
+          "const": "isolated_final_norm_lm_head"
+        },
+        "shard_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "shard_size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "shard_sha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "final_norm_tensor": {
+          "const": "model.norm.weight"
+        },
+        "lm_head_tensor": {
+          "const": "lm_head.weight"
+        },
+        "teacher_forced_full_model": {
+          "const": false
         }
       }
     },

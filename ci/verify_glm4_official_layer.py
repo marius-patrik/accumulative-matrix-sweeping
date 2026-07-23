@@ -9,6 +9,7 @@ import json
 import math
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from ams.canonical import canonical_json_bytes
 from ams.descriptors import DType, StorageObject
 from ams.errors import AmsError, ErrorCode
 from ams.integrations import (
+    Glm4LayerDifferentialStatus,
     Glm4LayerObservation,
     Glm4MoeLiteTensorRole,
     HuggingFaceShardSource,
@@ -36,6 +38,9 @@ _LAYER_INDEX = 1
 _SHARD_NAME = "model-00002-of-00048.safetensors"
 _SHARD_BYTES = 1_270_648_128
 _SHARD_SHA256 = "8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1"
+_HEAD_SHARD_NAME = "model-00047-of-00048.safetensors"
+_HEAD_SHARD_BYTES = 2_539_429_936
+_HEAD_SHARD_SHA256 = "1bcc5d06065d2a564894657945ccfe9411762421c2c60acf91de31050cd4d84d"
 _CONFIG_SHA256 = "dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb"
 _INDEX_SHA256 = "91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791"
 _EXPECTED_TENSOR_COUNT = 206
@@ -56,6 +61,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("asset_root", type=Path, help="Pinned config and full shard index")
     parser.add_argument("shard", type=Path, help=f"Exact local {_SHARD_NAME}")
+    parser.add_argument(
+        "--head-shard",
+        type=Path,
+        help=(
+            f"Optional exact local {_HEAD_SHARD_NAME}; enables the isolated final-norm/LM-head "
+            "readout comparison but does not make it a full-model teacher-forced run"
+        ),
+    )
     parser.add_argument("--samples", type=int, default=4, help="Deterministic token positions")
     parser.add_argument("--buffer-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument(
@@ -91,40 +104,45 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _open_authenticated_layer_shard(
+def _open_authenticated_shard(
     shard_path: Path,
     *,
+    expected_name: str,
+    expected_size_bytes: int,
+    expected_sha256: str,
+    object_id: str,
+    label: str,
     buffer_bytes: int,
 ) -> FileRangeStore:
-    """Open the exact pinned layer shard only after hashing its complete payload."""
+    """Open one pinned shard only after hashing its complete payload."""
 
     if buffer_bytes <= 0 or buffer_bytes > 64 * 1024 * 1024:
         raise AmsError(ErrorCode.PLAN_INVALID, "verification buffer is outside the reviewed bound")
-    if shard_path.name != _SHARD_NAME:
-        raise AmsError(ErrorCode.INVALID_PACKAGE, "GLM-4.7 layer shard name is not pinned")
+    if shard_path.name != expected_name:
+        raise AmsError(ErrorCode.INVALID_PACKAGE, f"{label} name is not pinned")
     try:
         if shard_path.is_symlink():
             raise AmsError(
                 ErrorCode.INTEGRITY_FAILURE,
-                "GLM-4.7 layer shard is a symbolic link",
+                f"{label} is a symbolic link",
             )
         resolved_shard = shard_path.resolve(strict=True)
-        if not resolved_shard.is_file() or resolved_shard.stat().st_size != _SHARD_BYTES:
+        if not resolved_shard.is_file() or resolved_shard.stat().st_size != expected_size_bytes:
             raise AmsError(
                 ErrorCode.INTEGRITY_FAILURE,
-                "GLM-4.7 layer shard is not the pinned regular-file size",
+                f"{label} is not the pinned regular-file size",
             )
     except AmsError:
         raise
     except OSError as exc:
-        raise AmsError(ErrorCode.IO_FAILURE, "GLM-4.7 layer shard metadata failed") from exc
+        raise AmsError(ErrorCode.IO_FAILURE, f"{label} metadata failed") from exc
 
     descriptor = StorageObject(
-        object_id=f"hf:{_SHARD_NAME}",
-        uri="file:local-pinned-glm47-layer1",
-        size_bytes=_SHARD_BYTES,
+        object_id=object_id,
+        uri=f"file:local-pinned-{expected_name}",
+        size_bytes=expected_size_bytes,
         alignment_bytes=1,
-        content_hash=f"sha256:{_SHARD_SHA256}",
+        content_hash=f"sha256:{expected_sha256}",
     )
     reader = FileRangeStore(resolved_shard, descriptor)
     reader.verify_content_hash(buffer_bytes=buffer_bytes)
@@ -150,7 +168,15 @@ def _admit_assets(asset_root: Path, shard_path: Path, *, buffer_bytes: int):
     architecture = parse_glm4_moe_lite_architecture(config_payload)
     index = parse_huggingface_shard_index(index_payload)
     inventory = validate_glm4_moe_lite_tensor_inventory(architecture, index)
-    reader = _open_authenticated_layer_shard(shard_path, buffer_bytes=buffer_bytes)
+    reader = _open_authenticated_shard(
+        shard_path,
+        expected_name=_SHARD_NAME,
+        expected_size_bytes=_SHARD_BYTES,
+        expected_sha256=_SHARD_SHA256,
+        object_id=f"hf:{_SHARD_NAME}",
+        label="GLM-4.7 layer shard",
+        buffer_bytes=buffer_bytes,
+    )
     source = HuggingFaceShardSource(
         shard_name=_SHARD_NAME,
         object_id=reader.descriptor.object_id,
@@ -193,8 +219,12 @@ def _admit_assets(asset_root: Path, shard_path: Path, *, buffer_bytes: int):
     return architecture, catalog, observed_by_name
 
 
-def _source_evidence(architecture, catalog) -> dict[str, object]:
-    return {
+def _source_evidence(
+    architecture,
+    catalog,
+    head_reader: FileRangeStore | None,
+) -> dict[str, object]:
+    source = {
         "repository": _REPOSITORY,
         "revision": _REVISION,
         "architecture_hash": architecture.content_hash,
@@ -207,6 +237,17 @@ def _source_evidence(architecture, catalog) -> dict[str, object]:
         "tensor_count": len(catalog.tensors),
         "tensor_payload_bytes": catalog.total_size,
     }
+    if head_reader is not None:
+        source["logit_readout"] = {
+            "kind": "isolated_final_norm_lm_head",
+            "shard_name": _HEAD_SHARD_NAME,
+            "shard_size_bytes": _HEAD_SHARD_BYTES,
+            "shard_sha256": f"sha256:{_HEAD_SHARD_SHA256}",
+            "final_norm_tensor": "model.norm.weight",
+            "lm_head_tensor": "lm_head.weight",
+            "teacher_forced_full_model": False,
+        }
+    return source
 
 
 def _deterministic_input(
@@ -247,6 +288,7 @@ def _require_reference_toolchain():
         from transformers import Glm4MoeLiteConfig
         from transformers.models.glm4_moe_lite.modeling_glm4_moe_lite import (
             Glm4MoeLiteDecoderLayer,
+            Glm4MoeLiteRMSNorm,
             Glm4MoeLiteRotaryEmbedding,
         )
     except ImportError as exc:
@@ -276,6 +318,7 @@ def _require_reference_toolchain():
         safe_open,
         Glm4MoeLiteConfig,
         Glm4MoeLiteDecoderLayer,
+        Glm4MoeLiteRMSNorm,
         Glm4MoeLiteRotaryEmbedding,
     )
 
@@ -499,6 +542,55 @@ def _run_ams_oracle(
     return observation, routes
 
 
+def _attach_isolated_logit_readout(
+    reference: Glm4LayerObservation,
+    candidate: Glm4LayerObservation,
+    architecture,
+    head_shard: Path,
+    torch,
+    safe_open,
+    Glm4MoeLiteRMSNorm,
+) -> tuple[Glm4LayerObservation, Glm4LayerObservation]:
+    """Apply one identical pinned BF16 final-norm/LM-head readout to both layer outputs."""
+
+    with safe_open(head_shard, framework="pt", device="cpu") as handle:
+        norm_weight = handle.get_tensor("model.norm.weight")
+        lm_head = handle.get_tensor("lm_head.weight")
+        if (
+            tuple(norm_weight.shape) != (architecture.hidden_size,)
+            or norm_weight.dtype is not torch.bfloat16
+        ):
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "official GLM-4.7 final normalization tensor semantics drifted",
+            )
+        if (
+            tuple(lm_head.shape) != (architecture.vocab_size, architecture.hidden_size)
+            or lm_head.dtype is not torch.bfloat16
+        ):
+            raise AmsError(
+                ErrorCode.CAPABILITY_MISMATCH,
+                "official GLM-4.7 LM-head tensor semantics drifted",
+            )
+        norm = Glm4MoeLiteRMSNorm(
+            architecture.hidden_size,
+            eps=architecture.rms_norm_eps,
+        )
+        norm.weight = torch.nn.Parameter(norm_weight, requires_grad=False)
+        norm.eval()
+
+        def project(observation: Glm4LayerObservation) -> tuple[tuple[float, ...], ...]:
+            hidden = torch.tensor(observation.hidden_states, dtype=torch.bfloat16)
+            with torch.no_grad():
+                logits = torch.nn.functional.linear(norm(hidden), lm_head)
+            return tuple(tuple(float(value) for value in row) for row in logits.float().tolist())
+
+        return replace(reference, logits=project(reference)), replace(
+            candidate,
+            logits=project(candidate),
+        )
+
+
 def _route_agreement(
     reference: tuple[dict[int, float], ...],
     candidate: tuple[dict[int, float], ...],
@@ -516,7 +608,19 @@ def _route_agreement(
     return matches / len(reference)
 
 
-def _preflight_output(source: dict[str, object]) -> dict[str, object]:
+def _preflight_output(
+    source: dict[str, object],
+    *,
+    has_logit_readout: bool,
+) -> dict[str, object]:
+    blockers = [
+        "official and AMS layer observations were not requested",
+        "native official-layer observation is absent",
+    ]
+    if has_logit_readout:
+        blockers.append("isolated logit readout was authenticated but not executed")
+    else:
+        blockers.append("teacher-forced logits are absent")
     return {
         "schema_id": "ams.glm4-layer-source-preflight.v1",
         "status": "blocked",
@@ -528,11 +632,7 @@ def _preflight_output(source: dict[str, object]) -> dict[str, object]:
             "full_layer_gate_passed": False,
             "qualifies_precision_policy": False,
         },
-        "blockers": [
-            "official and AMS layer observations were not requested",
-            "native official-layer observation is absent",
-            "teacher-forced logits are absent",
-        ],
+        "blockers": blockers,
     }
 
 
@@ -543,9 +643,29 @@ def main() -> int:
         arguments.shard,
         buffer_bytes=arguments.buffer_bytes,
     )
-    source = _source_evidence(architecture, catalog)
+    head_reader = None
+    if arguments.head_shard is not None:
+        head_reader = _open_authenticated_shard(
+            arguments.head_shard,
+            expected_name=_HEAD_SHARD_NAME,
+            expected_size_bytes=_HEAD_SHARD_BYTES,
+            expected_sha256=_HEAD_SHARD_SHA256,
+            object_id=f"hf:{_HEAD_SHARD_NAME}",
+            label="GLM-4.7 final-norm/LM-head shard",
+            buffer_bytes=arguments.buffer_bytes,
+        )
+    source = _source_evidence(architecture, catalog, head_reader)
     if arguments.preflight_only:
-        print(json.dumps(_preflight_output(source), indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                _preflight_output(
+                    source,
+                    has_logit_readout=head_reader is not None,
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 2
 
     (
@@ -555,6 +675,7 @@ def main() -> int:
         safe_open,
         Glm4MoeLiteConfig,
         Glm4MoeLiteDecoderLayer,
+        Glm4MoeLiteRMSNorm,
         Glm4MoeLiteRotaryEmbedding,
     ) = _require_reference_toolchain()
     input_values, input_hash = _deterministic_input(
@@ -584,6 +705,27 @@ def main() -> int:
         torch,
         safe_open,
     )
+    blockers = [
+        "candidate runtime is the AMS Python semantic oracle, not native ams-core execution"
+    ]
+    if head_reader is None:
+        blockers.append(
+            "official LM-head shard model-00047-of-00048.safetensors is absent; "
+            "teacher-forced logits were not produced"
+        )
+    else:
+        reference, candidate = _attach_isolated_logit_readout(
+            reference,
+            candidate,
+            architecture,
+            head_reader.path,
+            torch,
+            safe_open,
+            Glm4MoeLiteRMSNorm,
+        )
+        blockers.append(
+            "isolated final-head readout is not a complete-model teacher-forced execution"
+        )
     route_agreement = _route_agreement(reference_routes, candidate_routes)
     comparison = compare_glm4_layer_observations(
         reference,
@@ -591,13 +733,7 @@ def main() -> int:
         expected_hidden_size=architecture.hidden_size,
         expected_vocabulary_size=architecture.vocab_size,
         route_agreement=route_agreement,
-        blockers=(
-            "candidate runtime is the AMS Python semantic oracle, not native ams-core execution",
-            (
-                "official LM-head shard model-00047-of-00048.safetensors is absent; "
-                "teacher-forced logits were not produced"
-            ),
-        ),
+        blockers=tuple(blockers),
     )
     output = comparison.to_dict()
     output["source"] = source
@@ -624,7 +760,7 @@ def main() -> int:
         "logits_hash": candidate.logits_hash,
     }
     print(json.dumps(output, indent=2, sort_keys=True))
-    return 0 if comparison.full_layer_gate_passed else 2
+    return 0 if comparison.status is Glm4LayerDifferentialStatus.PASSED else 2
 
 
 if __name__ == "__main__":

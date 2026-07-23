@@ -92,6 +92,31 @@ def test_hidden_only_differential_is_explicitly_blocked_from_promotion() -> None
     )
 
 
+def test_passing_metrics_remain_blocked_when_runtime_evidence_is_incomplete() -> None:
+    reference = _observation(
+        "official-reference",
+        ((1.0, 2.0), (3.0, 4.0)),
+        ((0.0, 2.0, 1.0), (4.0, 3.0, 2.0)),
+    )
+    candidate = _observation(
+        "ams-candidate",
+        ((1.0, 2.0), (3.0, 4.0)),
+        ((0.0, 2.0, 1.0), (4.0, 3.0, 2.0)),
+    )
+
+    evidence = compare_glm4_layer_observations(
+        reference,
+        candidate,
+        expected_hidden_size=2,
+        expected_vocabulary_size=3,
+        blockers=("candidate runtime is not native ams-core",),
+    )
+
+    assert evidence.status is Glm4LayerDifferentialStatus.BLOCKED
+    assert evidence.full_layer_gate_passed
+    assert evidence.blockers == ("candidate runtime is not native ams-core",)
+
+
 def test_threshold_failure_and_corpus_drift_fail_closed() -> None:
     reference = _observation(
         "official-reference",
