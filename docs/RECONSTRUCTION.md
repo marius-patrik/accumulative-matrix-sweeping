@@ -264,8 +264,10 @@ The reconstruction branch currently contains:
   decoder stack, final RMSNorm, a mixed-storage LM head, and deterministic lowest-index argmax. Its
   three-token-vocabulary fixture pins 144 bytes of non-layer scratch, rejects a short LM-head binding
   before the embedding reader is touched, rolls both layer caches back when a non-finite LM-head value
-  fails after decoder execution, and retries successfully. The wrapper is manually bound; package plan
-  construction, autoregressive generation, and sampling remain open.
+  fails after decoder execution, and retries successfully. The plan separately admits full model rows
+  and tokenizer-mapped IDs; its deliberately highest unmapped logit cannot be selected or accepted as
+  input. The wrapper is manually bound; package plan construction, autoregressive generation, and
+  sampling remain open.
 - an exact GLM-4.7 tokenizer admission and execution boundary. It hashes the complete pinned
   tokenizer/config/template triplet before parsing, rejects symlinks and semantic drift, proves the
   contiguous tokenizer range `0..154855`, and identifies model-logit IDs `154856..154879` as unmapped

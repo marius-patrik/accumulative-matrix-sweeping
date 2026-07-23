@@ -95,7 +95,8 @@ first read, reuses one working set per layer class, and treats all per-layer KV 
 a later expert failure rolls earlier layer prefixes back so the same token can be retried safely.
 The first native causal-LM token wrapper adds exact embedding-row access, final RMSNorm, mixed-storage
 LM-head execution, and deterministic lowest-index argmax. It preflights the complete manually bound
-model before the embedding read and rolls the decoder stack back if the final norm or head fails; a
+model before the embedding read, distinguishes full model rows from tokenizer-mapped IDs, masks
+unmapped logits from selection, and rolls the decoder stack back if the final norm or head fails; a
 package-to-native binder, sampling, and generation loop are still required.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves

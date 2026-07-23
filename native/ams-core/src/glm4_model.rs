@@ -54,7 +54,8 @@ pub struct Glm4ModelPlan {
     decoder: Glm4DecoderPlan,
     lm_head: LinearPlan,
     layout: Glm4ModelVectorLayout,
-    vocabulary_size: usize,
+    model_vocabulary_size: usize,
+    tokenizer_vocabulary_size: usize,
     embedding_end: u64,
     final_norm_end: u64,
     rms_norm_epsilon: f64,
@@ -72,11 +73,14 @@ impl Glm4ModelPlan {
         decoder: Glm4DecoderPlan,
         lm_head: LinearPlan,
         layout: Glm4ModelVectorLayout,
+        tokenizer_vocabulary_size: usize,
         rms_norm_epsilon: f64,
     ) -> Result<Self, AmsError> {
         let hidden_elements = decoder.hidden_elements();
-        let vocabulary_size = lm_head.rows();
-        if vocabulary_size == 0
+        let model_vocabulary_size = lm_head.rows();
+        if model_vocabulary_size == 0
+            || tokenizer_vocabulary_size == 0
+            || tokenizer_vocabulary_size > model_vocabulary_size
             || lm_head.columns() != hidden_elements
             || !rms_norm_epsilon.is_finite()
             || rms_norm_epsilon <= 0.0
@@ -92,7 +96,7 @@ impl Glm4ModelPlan {
             "GLM-4 embedding row bytes overflow",
         )?;
         let embedding_bytes = mul(
-            vocabulary_size,
+            model_vocabulary_size,
             embedding_row_bytes,
             "GLM-4 embedding bytes overflow",
         )?;
@@ -119,7 +123,7 @@ impl Glm4ModelPlan {
         )?;
         let float_elements = add(
             hidden_float_elements,
-            vocabulary_size,
+            model_vocabulary_size,
             "GLM-4 model float scratch elements overflow",
         )?;
         let vector_encoded_bytes = embedding_row_bytes.max(final_norm_bytes);
@@ -140,7 +144,8 @@ impl Glm4ModelPlan {
             decoder,
             lm_head,
             layout,
-            vocabulary_size,
+            model_vocabulary_size,
+            tokenizer_vocabulary_size,
             embedding_end,
             final_norm_end,
             rms_norm_epsilon,
@@ -148,7 +153,7 @@ impl Glm4ModelPlan {
                 vector_encoded_bytes,
                 lm_head: lm_head_scratch,
                 hidden_elements,
-                logit_elements: vocabulary_size,
+                logit_elements: model_vocabulary_size,
                 local_bytes,
             },
         })
@@ -166,10 +171,16 @@ impl Glm4ModelPlan {
         &self.decoder
     }
 
-    /// Vocabulary size and LM-head row count.
+    /// Full model vocabulary size and LM-head row count.
     #[must_use]
-    pub const fn vocabulary_size(&self) -> usize {
-        self.vocabulary_size
+    pub const fn model_vocabulary_size(&self) -> usize {
+        self.model_vocabulary_size
+    }
+
+    /// Tokenizer-mapped prefix eligible for input and output token selection.
+    #[must_use]
+    pub const fn tokenizer_vocabulary_size(&self) -> usize {
+        self.tokenizer_vocabulary_size
     }
 }
 
@@ -298,7 +309,7 @@ pub fn glm4_model_next_token(
     input_token: usize,
     scratch: &mut Glm4ModelScratch<'_>,
 ) -> Result<usize, AmsError> {
-    if input_token >= plan.vocabulary_size {
+    if input_token >= plan.tokenizer_vocabulary_size {
         return Err(AmsError::new(
             ErrorCode::PlanInvalid,
             "GLM-4 model input token is outside the vocabulary",
@@ -383,7 +394,7 @@ pub fn glm4_model_next_token(
             plan.rms_norm_epsilon,
             normalized,
         )?;
-        let logits = &mut scratch.logits[..plan.vocabulary_size];
+        let logits = &mut scratch.logits[..plan.model_vocabulary_size];
         stream_linear(
             readers.lm_head,
             plan.lm_head,
@@ -392,7 +403,7 @@ pub fn glm4_model_next_token(
             &mut scratch.lm_head,
             logits,
         )?;
-        select_argmax(logits)
+        select_argmax(&logits[..plan.tokenizer_vocabulary_size])
     })();
     match tail {
         Ok(token) => Ok(token),

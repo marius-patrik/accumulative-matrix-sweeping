@@ -832,16 +832,19 @@ mod tests {
             decoder,
             linear_plan(3, 2)?,
             Glm4ModelVectorLayout::new(0, 0, IdentityDType::Float32, IdentityDType::Float32),
+            2,
             1e-5,
         )?;
-        assert_eq!(model.vocabulary_size(), 3);
+        assert_eq!(model.model_vocabulary_size(), 3);
+        assert_eq!(model.tokenizer_vocabulary_size(), 2);
         assert_eq!(model.scratch().local_bytes, 144);
         let norm = encode_f32(&[1.0, 1.0]);
         let correction = encode_f32(&[0.0, 1.0]);
         let zeros = encode_f32(&[0.0; 8]);
         let embeddings = encode_f32(&[0.0, 0.0, 1.0, -1.0, -1.0, 1.0]);
-        let lm_head = encode_f32(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
-        let bad_lm_head = encode_f32(&[f32::NAN, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        // The unmapped third row scores above the second row and must not be selected.
+        let lm_head = encode_f32(&[0.0, 0.0, 1.0, 0.0, 1.0, -1.0]);
+        let bad_lm_head = encode_f32(&[f32::NAN, 0.0, 1.0, 0.0, 1.0, -1.0]);
         let norm_reader = SliceReader::new(&norm);
         let correction_reader = SliceReader::new(&correction);
         let zero_reader = SliceReader::new(&zeros);
@@ -909,6 +912,9 @@ mod tests {
             &norm_reader,
             &short_lm_head_reader,
         );
+        let error = run_model_fixture(&model, &short_readers, &mut caches, 0, 2).err();
+        assert_eq!(error.map(AmsError::code), Some(ErrorCode::PlanInvalid));
+        assert_eq!(embedding_reader.reads.get(), 0);
         let error = run_model_fixture(&model, &short_readers, &mut caches, 0, 1).err();
         assert_eq!(error.map(AmsError::code), Some(ErrorCode::IoFailure));
         assert_eq!(embedding_reader.reads.get(), 0);
