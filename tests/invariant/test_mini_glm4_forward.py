@@ -1,8 +1,11 @@
 import hashlib
 import json
+import os
 import shutil
 import struct
+import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
@@ -39,6 +42,7 @@ from ams.ops import (
     GlmReferenceWeights,
     GlmWeightAccess,
     run_glm4_moe_lite_prefill_reference,
+    serialize_glm4_native_binding_plan,
 )
 from ams.package import (
     GraphArtifact,
@@ -649,6 +653,97 @@ def test_mini_glm4_native_binding_is_deterministic_bounded_and_read_free(
         eos_token_ids=(6, 7),
     )
     assert shorter_plan.binding_hash != plan.binding_hash
+
+
+def test_mini_glm4_native_envelope_preserves_identity_and_localizes_paths(
+    tmp_path: Path,
+) -> None:
+    package_root, _, _ = build_mini_glm4_package(tmp_path)
+    package_weights = GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    plan = package_weights.native_glm4_binding_plan(
+        context_capacity_tokens=8,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(6, 7),
+    )
+    envelope_bytes = serialize_glm4_native_binding_plan(plan)
+    envelope = json.loads(envelope_bytes)
+    assert envelope["schema_id"] == "ams.native.glm4-envelope.v1"
+    assert envelope["binding_hash"] == plan.binding_hash
+    assert envelope["binding_identity_json"].encode() == plan.binding_identity_json
+    assert canonical_json_bytes(envelope) == envelope_bytes
+    assert tuple(path["object_id"] for path in envelope["storage_paths"]) == tuple(
+        binding.object_id for binding in plan.storage_objects
+    )
+    assert package_weights.read_evidence == type(package_weights.read_evidence)(0, 0, 0, 0)
+
+    relocated_root = tmp_path / "relocated-package"
+    shutil.copytree(package_root, relocated_root)
+    relocated = GlmPackageWeights.open(relocated_root, linear_arena_bytes=64)
+    relocated_plan = relocated.native_glm4_binding_plan(
+        context_capacity_tokens=8,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(6, 7),
+    )
+    relocated_envelope = json.loads(serialize_glm4_native_binding_plan(relocated_plan))
+    assert relocated_envelope["binding_identity_json"] == envelope["binding_identity_json"]
+    assert relocated_envelope["storage_paths"] != envelope["storage_paths"]
+
+    with pytest.raises(AmsError) as caught:
+        serialize_glm4_native_binding_plan(replace(plan, binding_hash=digest(b"other")))
+    assert caught.value.code is ErrorCode.INTEGRITY_FAILURE
+
+
+def test_mini_glm4_native_bridge_process_verifies_and_retries_exact_objects(
+    tmp_path: Path,
+) -> None:
+    binary = os.environ.get("AMS_NATIVE_BINARY")
+    if binary is None:
+        pytest.skip("native bridge binary is exercised by the post-build verification step")
+    package_root, _, _ = build_mini_glm4_package(tmp_path)
+    package_weights = GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    plan = package_weights.native_glm4_binding_plan(
+        context_capacity_tokens=8,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(6, 7),
+    )
+    envelope_path = tmp_path / "native-binding.json"
+    envelope_path.write_bytes(serialize_glm4_native_binding_plan(plan))
+
+    def inspect():
+        return subprocess.run(
+            [binary, "inspect", str(envelope_path), "64"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    completed = inspect()
+    assert completed.returncode == 0, completed.stderr
+    evidence = json.loads(completed.stdout)
+    assert evidence["schema_id"] == "ams.native.glm4-admission.v1"
+    assert evidence["binding_hash"] == plan.binding_hash
+    assert evidence["verified_object_count"] == len(plan.storage_objects)
+    assert evidence["verified_object_bytes"] == sum(
+        binding.size_bytes for binding in plan.storage_objects
+    )
+    assert evidence["verification_buffer_bytes"] == 64
+    assert evidence["tensor_count"] == len(plan.tensors)
+    assert evidence["executable_tensor_count"] == plan.executable_tensor_count
+    assert evidence["mtp_tensor_count"] == plan.mtp_tensor_count
+    assert package_weights.read_evidence == type(package_weights.read_evidence)(0, 0, 0, 0)
+
+    corrupt_path = Path(plan.storage_objects[0].absolute_path)
+    original = corrupt_path.read_bytes()
+    corrupt_path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+    failed = inspect()
+    assert failed.returncode != 0
+    assert json.loads(failed.stderr)["code"] == ErrorCode.INTEGRITY_FAILURE.value
+
+    corrupt_path.write_bytes(original)
+    retried = inspect()
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout) == evidence
 
 
 @pytest.mark.parametrize(

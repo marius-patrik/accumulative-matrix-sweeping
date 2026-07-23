@@ -28,6 +28,7 @@ from ams.ops.glm_package_weights import (
     Glm4NativeTensorBinding,
     GlmPackageReadEvidence,
     GlmPackageWeights,
+    serialize_glm4_native_binding_plan,
 )
 from ams.ops.reference import (
     Int4StreamedLinearPlan,
@@ -64,6 +65,7 @@ __all__ = [
     "route_glm_experts_reference",
     "run_glm4_moe_lite_prefill_reference",
     "run_glm_moe_dsa_prefill_reference",
+    "serialize_glm4_native_binding_plan",
     "silu_reference",
     "softmax_reference",
     "stream_linear_f32",

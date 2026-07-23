@@ -109,11 +109,14 @@ binding. It orders the exact tensor inventory, maps every range to a deduplicate
 carries dtype/codec/layer/expert/MTP metadata, admits only native-compatible identity vectors, and
 hashes package plus runtime policy without hashing machine-local paths. Context, tokenizer, EOS,
 BF16/FP32 cache, linear-arena, and exact per-layer/total KV byte limits are explicit. Descriptor
-construction reads no tensor payload; a native reader registry that verifies each declared object
-hash is still required before this becomes model-backed serving. The Rust core now independently
+construction reads no tensor payload. The Rust core independently
 revalidates normalized base-model bindings and constructs the complete dense/sparse decoder, model
-plan, and borrow-scoped reader topology without reading weights; the wrapper that translates the
-descriptor, verifies objects, and owns fixed caches/scratch remains open.
+plan, and borrow-scoped reader topology without reading weights. The new `ams-runtime inspect`
+boundary consumes an exact hashed Python identity plus local path map, revalidates the complete
+base+MTP inventory, shapes, codecs, ranges, cache limits, and model plan, then full-hashes every object
+through the same retained nonsymlink file handles. A cross-language miniature corruption/retry test
+proves fail-closed admission. Owned caches/scratch and generation through this admitted binding remain
+open.
 The first deterministic GLM-4.7 precision candidate keeps embeddings, routers, norms, and correction
 biases exact, assigns routed-expert matrices to grouped ternary, and assigns other rank-2 compute
 matrices to symmetric INT4. A complete header-only audit estimates 9,100,218,112 encoded tensor bytes

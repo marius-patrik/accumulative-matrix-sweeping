@@ -1,5 +1,5 @@
 [workspace]
-members = ["native/ams-core"]
+members = ["native/ams-core", "native/ams-runtime"]
 resolver = "3"
 
 [workspace.package]

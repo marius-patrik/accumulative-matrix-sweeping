@@ -317,9 +317,17 @@ The reconstruction branch currently contains:
   dense/sparse decoder plus model plan. Its borrow-scoped callback assembles the exact reader topology
   only after registry count and object lengths match, avoiding self-referential ownership; malformed
   inventory, transposition, vector low-bit storage, codec length, and registry drift fail before
-  execution. The remaining native wrapper must translate the Python descriptor without weakening
-  either validator, verify each complete object hash before ranges are served, and own the fixed
-  caches and scratch. Neither metadata-only construction path is model execution.
+  execution. Python now serializes the exact canonical binding identity separately from its
+  machine-local path map. The dependency-pinned `ams-runtime inspect` boundary rejects unknown and
+  duplicate JSON fields, verifies the identity hash, independently reconstructs the complete base
+  plus MTP inventory and all architecture-derived shapes, re-derives codec hashes/byte counts and
+  cache limits, rebuilds the native model plan, then full-hashes every nonsymlink object with a
+  bounded buffer through the same retained file handle later exposed to range execution. No admitted
+  binding becomes observable after a partial failure. The cross-language miniature package verifies
+  52 objects containing all 61 tensors (35 executable and 26 separately marked MTP), and deliberate
+  object corruption returns `INTEGRITY_FAILURE`; restoring the exact bytes makes a repeated command
+  produce identical evidence. Owned caches/scratch and generation are the remaining wrapper layer;
+  native admission alone is not yet model execution.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal

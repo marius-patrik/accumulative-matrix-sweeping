@@ -189,6 +189,7 @@ class Glm4NativeBindingPlan:
 
     schema_id: str
     binding_hash: str
+    binding_identity_json: bytes
     package_id: str
     manifest_content_root: str
     architecture: Glm4MoeLiteArchitecture
@@ -222,6 +223,55 @@ class Glm4NativeBindingPlan:
             (encoding, sum(tensor.encoding == encoding for tensor in self.tensors))
             for encoding in sorted(encodings)
         )
+
+
+def serialize_glm4_native_binding_plan(plan: Glm4NativeBindingPlan) -> bytes:
+    """Serialize one exact binding identity plus its machine-local object-path map."""
+    if not isinstance(plan, Glm4NativeBindingPlan):
+        raise AmsError(ErrorCode.PLAN_INVALID, "native GLM-4 binding has the wrong type")
+    if plan.schema_id != "ams.native.glm4-binding.v1":
+        raise AmsError(ErrorCode.CAPABILITY_MISMATCH, "native GLM-4 binding schema is unsupported")
+    expected_hash = "sha256:" + hashlib.sha256(plan.binding_identity_json).hexdigest()
+    if expected_hash != plan.binding_hash:
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "native GLM-4 binding identity does not match its declared hash",
+        )
+    try:
+        identity = json.loads(
+            plan.binding_identity_json,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateManifestKey, ValueError) as exc:
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "native GLM-4 binding identity JSON is invalid",
+        ) from exc
+    if canonical_json_bytes(identity) != plan.binding_identity_json:
+        raise AmsError(
+            ErrorCode.INTEGRITY_FAILURE,
+            "native GLM-4 binding identity JSON is not canonical",
+        )
+    object_ids = tuple(binding.object_id for binding in plan.storage_objects)
+    if len(set(object_ids)) != len(object_ids):
+        raise AmsError(
+            ErrorCode.INTERNAL_INVARIANT,
+            "native GLM-4 storage object identity is duplicated",
+        )
+    envelope = {
+        "binding_hash": plan.binding_hash,
+        "binding_identity_json": plan.binding_identity_json.decode("utf-8"),
+        "schema_id": "ams.native.glm4-envelope.v1",
+        "storage_paths": [
+            {
+                "absolute_path": binding.absolute_path,
+                "object_id": binding.object_id,
+            }
+            for binding in plan.storage_objects
+        ],
+    }
+    return canonical_json_bytes(envelope)
 
 
 def _parse_manifest_payload(path: Path, max_manifest_bytes: int) -> dict[str, Any]:
@@ -897,12 +947,12 @@ class GlmPackageWeights(GlmWeightAccess):
             "tokenizer_vocabulary_size": tokenizer_vocabulary_size,
             "eos_token_ids": normalized_eos,
         }
-        binding_hash = (
-            "sha256:" + hashlib.sha256(canonical_json_bytes(identity_payload)).hexdigest()
-        )
+        binding_identity_json = canonical_json_bytes(identity_payload)
+        binding_hash = "sha256:" + hashlib.sha256(binding_identity_json).hexdigest()
         return Glm4NativeBindingPlan(
             schema_id="ams.native.glm4-binding.v1",
             binding_hash=binding_hash,
+            binding_identity_json=binding_identity_json,
             package_id=self._package_id,
             manifest_content_root=self._manifest_content_root,
             architecture=architecture,
