@@ -21,7 +21,7 @@ projected from parameter counts.
 | Surface | Authoritative state | Interpretation |
 | --- | --- | --- |
 | AMS paper repository | `marius-patrik/accumulative-matrix-sweeping` `main` at `992c3fc5872df722eb4fc943a46ab979214ef66a` | Normative manuscript, implementation specification, acceptance matrix, and JSON Schemas. It contains no prior runtime implementation. |
-| AMS reconstruction | Local branch `reconstruct/glm52-runtime` from `992c3fc` | The only active implementation tree. No remote branch or PR has been created. |
+| AMS reconstruction | Local and remote branch `reconstruct/glm52-runtime`, from `992c3fc`, containing the implementation milestone `076e07e63081e8a94aa9c9f4044118f9abcb9b7f` plus status-only documentation | The active implementation lineage. No PR was created for the direct owner-authorized integration. |
 | PAES public repository | `marius-patrik/PAES` `main` at `68f3bb69df81a1ecdf88cd2a7daec567ab606f27` | Original PAES 1.0.0 implementation. |
 | PAES enterprise recovery | Bundle branch `chore/enterprise-ams-integration` at `d235ac54a13828caac6129de30892d3ff4ff53a8` | Recovered protocol/conformance integration. The bundle is preserved as evidence, not treated as AMS runtime source. |
 | Missing AMS gitlink | `813d55ad985dc9d17daae08957d0853b569278bd` | Referenced by recovered PAES but absent from available Git objects. It must not be synthesized or misrepresented as recovered history. |
@@ -32,8 +32,9 @@ projected from parameter counts.
 | GLM-4-MoE-Lite reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, generated/modular model, tests, and documentation used to pin MLA, interleaved RoPE, sigmoid/noaux_tc routing, dense/sparse scheduling, and base-model treatment of MTP weights. |
 | GLM-MoE-DSA reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, model, tests, and documentation used to derive execution order and compatibility risks. |
 
-Remote refs were fetched with pruning on the status date. No merge, reset, checkout, push, or remote
-history mutation was performed.
+Remote refs were fetched with pruning on the status date, and the reconstruction branch was pushed.
+The owner-authorized integration is direct; no reset, force-push, or fabricated-history mutation is
+used.
 
 ## Fixed target
 
@@ -449,8 +450,9 @@ The reconstruction branch currently contains:
   no real Froq coding task or production GLM-4.7/GLM-5.2 package has run yet.
 
 The automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, passes 212 ordinary Python tests plus four post-build native-process cases, and runs
-58 core plus eight runtime Rust tests with `cargo check` and strict Clippy. The unit
+Draft 2020-12, passes 240 ordinary Python tests with four expected native-binary skips, then builds
+`ams-runtime` and passes all four skipped native-process/model-backed cases. It also runs 58 core plus
+eight runtime Rust tests with `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
