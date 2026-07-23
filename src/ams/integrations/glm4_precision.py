@@ -172,7 +172,14 @@ def _validate_unit_interval(value: float, *, name: str) -> None:
         raise AmsError(ErrorCode.PLAN_INVALID, f"{name} must be in [0, 1]")
 
 
-def _encoding_for_role(role: Glm4MoeLiteTensorRole) -> HuggingFaceTensorEncoding:
+def experimental_glm4_encoding_for_role(
+    role: Glm4MoeLiteTensorRole,
+) -> HuggingFaceTensorEncoding:
+    """Return the exact reviewed role assignment for the experimental candidate."""
+    try:
+        role = Glm4MoeLiteTensorRole(role)
+    except ValueError as exc:
+        raise AmsError(ErrorCode.INTERNAL_INVARIANT, "unreviewed GLM-4 precision role") from exc
     if role in _IDENTITY_ROLES:
         return HuggingFaceTensorEncoding.IDENTITY
     if role in _TERNARY_ROLES:
@@ -243,7 +250,7 @@ def build_experimental_glm4_precision_candidate(
     encoding_counts = {encoding: 0 for encoding in HuggingFaceTensorEncoding}
     for slot in inventory.slots:
         tensor = tensor_by_name[slot.tensor_name]
-        encoding = _encoding_for_role(slot.role)
+        encoding = experimental_glm4_encoding_for_role(slot.role)
         element_count = checked_product(tensor.shape, name="glm4_precision.elements")
         if encoding is HuggingFaceTensorEncoding.IDENTITY:
             assignment = HuggingFaceTensorAssignment(slot.tensor_name, encoding)

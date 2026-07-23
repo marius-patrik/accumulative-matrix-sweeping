@@ -7,7 +7,9 @@ import pytest
 
 from ams.codecs.ternary import (
     TernaryCodecConfig,
+    decode_ternary_group_reference,
     decode_ternary_reference,
+    encode_ternary_group_reference,
     encode_ternary_stream,
 )
 from ams.descriptors import ByteRange, DType
@@ -63,6 +65,26 @@ def test_known_group_has_stable_trit5_encoding_and_reconstruction() -> None:
     assert payload == struct.pack("<fB", 1.5, 225)
     assert result.content_hash == digest(payload)
     assert decode_ternary_reference(payload, 5, config) == [-1.5, -1.5, 0.0, 1.5, 1.5]
+
+
+def test_public_group_encoder_is_exact_and_rejects_invalid_values() -> None:
+    config = TernaryCodecConfig(group_size=3)
+    values = [-1.0, 0.0, 1.0]
+    payload, _, _ = encode(values, DType.FLOAT32, config)
+    group_payload = encode_ternary_group_reference(values, config)
+    assert group_payload == payload
+    assert decode_ternary_group_reference(group_payload, len(values)) == decode_ternary_reference(
+        payload, len(values), config
+    )
+    with pytest.raises(AmsError) as caught:
+        encode_ternary_group_reference([0.0, float("inf")], config)
+    assert caught.value.code is ErrorCode.NUMERIC_FAILURE
+    with pytest.raises(AmsError) as caught:
+        encode_ternary_group_reference([0.0] * 4, config)
+    assert caught.value.code is ErrorCode.PLAN_INVALID
+    with pytest.raises(AmsError) as caught:
+        encode_ternary_group_reference([10**10_000], config)
+    assert caught.value.code is ErrorCode.NUMERIC_FAILURE
 
 
 @pytest.mark.parametrize("dtype", [DType.FLOAT16, DType.BFLOAT16, DType.FLOAT32])

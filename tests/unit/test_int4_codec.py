@@ -5,7 +5,13 @@ from io import BytesIO
 
 import pytest
 
-from ams.codecs import Int4CodecConfig, decode_int4_reference, encode_int4_stream
+from ams.codecs import (
+    Int4CodecConfig,
+    decode_int4_group_reference,
+    decode_int4_reference,
+    encode_int4_group_reference,
+    encode_int4_stream,
+)
 from ams.descriptors import ByteRange, DType
 from ams.errors import AmsError, ErrorCode
 
@@ -61,6 +67,26 @@ def test_rounding_is_half_away_from_zero_against_the_stored_scale() -> None:
     config = Int4CodecConfig(group_size=7)
     payload, _, _ = encode([0.5, -0.5, 1.49, -1.49, 1.5, -1.5, 7.0], DType.FLOAT32, config)
     assert payload == struct.pack("<f4B", 1.0, 0xF1, 0xF1, 0xE2, 0x07)
+
+
+def test_public_group_encoder_is_exact_and_rejects_invalid_values() -> None:
+    config = Int4CodecConfig(group_size=3)
+    values = [-1.0, 0.0, 1.0]
+    payload, _, _ = encode(values, DType.FLOAT32, config)
+    group_payload = encode_int4_group_reference(values, config)
+    assert group_payload == payload
+    assert decode_int4_group_reference(group_payload, len(values)) == decode_int4_reference(
+        payload, len(values), config
+    )
+    with pytest.raises(AmsError) as caught:
+        encode_int4_group_reference([0.0, float("nan")], config)
+    assert caught.value.code is ErrorCode.NUMERIC_FAILURE
+    with pytest.raises(AmsError) as caught:
+        encode_int4_group_reference([0.0] * 4, config)
+    assert caught.value.code is ErrorCode.PLAN_INVALID
+    with pytest.raises(AmsError) as caught:
+        encode_int4_group_reference([10**10_000], config)
+    assert caught.value.code is ErrorCode.NUMERIC_FAILURE
 
 
 @pytest.mark.parametrize("dtype", [DType.FLOAT16, DType.BFLOAT16, DType.FLOAT32])

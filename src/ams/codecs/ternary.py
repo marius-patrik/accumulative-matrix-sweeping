@@ -143,6 +143,34 @@ def _encode_group(values: Sequence[float], config: TernaryCodecConfig) -> bytes:
     return bytes(payload)
 
 
+def encode_ternary_group_reference(
+    values: Sequence[float],
+    config: TernaryCodecConfig | None = None,
+) -> bytes:
+    """Validate and encode one complete v1 group using the production codec semantics."""
+    config = config or TernaryCodecConfig()
+    try:
+        element_count = len(values)
+    except TypeError as exc:
+        raise AmsError(ErrorCode.PLAN_INVALID, "ternary group values must be a sequence") from exc
+    checked_positive(element_count, name="ternary.group_element_count")
+    if element_count > config.group_size:
+        raise AmsError(ErrorCode.PLAN_INVALID, "ternary group exceeds configured group size")
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise AmsError(ErrorCode.PLAN_INVALID, "ternary group values must be numeric")
+        try:
+            finite = math.isfinite(value)
+        except OverflowError as exc:
+            raise AmsError(
+                ErrorCode.NUMERIC_FAILURE,
+                "ternary source contains an unrepresentable numeric value",
+            ) from exc
+        if not finite:
+            raise AmsError(ErrorCode.NUMERIC_FAILURE, "ternary source contains NaN or infinity")
+    return _encode_group(values, config)
+
+
 def _write_exact(sink: BinarySink, payload: bytes, digest) -> int:
     view = memoryview(payload)
     try:
@@ -221,7 +249,11 @@ def encode_ternary_stream(
             source_digest.update(window)
             maximum_read = max(maximum_read, byte_count)
             values = _decode_source_group(source_buffer, count, source_dtype)
-            encoded_bytes += _write_exact(sink, _encode_group(values, config), output_digest)
+            encoded_bytes += _write_exact(
+                sink,
+                encode_ternary_group_reference(values, config),
+                output_digest,
+            )
             completed += count
     finally:
         source_view.release()

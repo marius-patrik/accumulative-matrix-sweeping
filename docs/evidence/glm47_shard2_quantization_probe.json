@@ -1,0 +1,226 @@
+{
+  "architecture_hash": "sha256:dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb",
+  "candidate_hash": "sha256:3c9c4d9985986f40ea1c04860729c93dd900bbd9f5256558cc0e991cf8dcc0ba",
+  "encoding_metrics": [
+    {
+      "cosine_similarity": 0.9922271935934194,
+      "maximum_absolute_error": 0.0364815890789032,
+      "mean_absolute_error": 0.0026939356516394453,
+      "normalized_mean_absolute_error": 0.13552211551451437,
+      "normalized_root_mean_square_error": 0.1254004618520335,
+      "reconstructed_zero_fraction": 0.1903076171875,
+      "sampled_element_count": 65536,
+      "sampled_group_count": 512,
+      "sampled_source_bytes": 131072,
+      "scope": "int4_symmetric",
+      "tensor_count": 8
+    },
+    {
+      "cosine_similarity": 0.9003554603438416,
+      "maximum_absolute_error": 0.10195701755583286,
+      "mean_absolute_error": 0.0080155017837793,
+      "normalized_mean_absolute_error": 0.43248133596776395,
+      "normalized_root_mean_square_error": 0.43515519648522344,
+      "reconstructed_zero_fraction": 0.4226086934407552,
+      "sampled_element_count": 1572864,
+      "sampled_group_count": 12288,
+      "sampled_source_bytes": 3145728,
+      "scope": "ternary_trit5",
+      "tensor_count": 192
+    }
+  ],
+  "encoding_tensor_counts": [
+    [
+      "identity",
+      6
+    ],
+    [
+      "int4_symmetric",
+      8
+    ],
+    [
+      "ternary_trit5",
+      192
+    ]
+  ],
+  "groups_per_tensor": 64,
+  "hash_buffer_bytes": 1048576,
+  "identity_tensor_count": 6,
+  "int4_config_hash": "sha256:3f79c72ebff39734ec3d34b3b0d0551e5c7569c657fb6579ef4f9acf4cabb881",
+  "integrity_bytes_read": 1270648128,
+  "maximum_sample_read_bytes": 256,
+  "policy_hash": "sha256:b954d6e6f55551919d6cfc38eb6d7738bfb21e5530144f1ac6e6d7af06df6717",
+  "prefix_and_header_bytes_read": 25152,
+  "probe_config_hash": "sha256:0c13eb4e2647dbef06dcef8ad764014e33d288ea7e968d6c0928f6aebb34492a",
+  "qualifies_precision_policy": false,
+  "role_metrics": [
+    {
+      "cosine_similarity": 0.9925243590452832,
+      "maximum_absolute_error": 0.0223388671875,
+      "mean_absolute_error": 0.0032571570509389858,
+      "normalized_mean_absolute_error": 0.1321316211914836,
+      "normalized_root_mean_square_error": 0.12318869030498487,
+      "reconstructed_zero_fraction": 0.164794921875,
+      "sampled_element_count": 8192,
+      "sampled_group_count": 64,
+      "sampled_source_bytes": 16384,
+      "scope": "attention_kv_a_projection",
+      "tensor_count": 1
+    },
+    {
+      "cosine_similarity": 0.9931227782241597,
+      "maximum_absolute_error": 0.0222516730427742,
+      "mean_absolute_error": 0.0037807308900141834,
+      "normalized_mean_absolute_error": 0.1251105958048743,
+      "normalized_root_mean_square_error": 0.11757803945098426,
+      "reconstructed_zero_fraction": 0.1585693359375,
+      "sampled_element_count": 8192,
+      "sampled_group_count": 64,
+      "sampled_source_bytes": 16384,
+      "scope": "attention_kv_b_projection",
+      "tensor_count": 1
+    },
+    {
+      "cosine_similarity": 0.99289905654868,
+      "maximum_absolute_error": 0.006822858937084675,
+      "mean_absolute_error": 0.002089721011259371,
+      "normalized_mean_absolute_error": 0.12787349774049983,
+      "normalized_root_mean_square_error": 0.1195728909963876,
+      "reconstructed_zero_fraction": 0.1546630859375,
+      "sampled_element_count": 8192,
+      "sampled_group_count": 64,
+      "sampled_source_bytes": 16384,
+      "scope": "attention_output_projection",
+      "tensor_count": 1
+    },
+    {
+      "cosine_similarity": 0.9931435146802234,
+      "maximum_absolute_error": 0.005859375,
+      "mean_absolute_error": 0.0014437373444087243,
+      "normalized_mean_absolute_error": 0.12651320389222367,
+      "normalized_root_mean_square_error": 0.11788569284370128,
+      "reconstructed_zero_fraction": 0.1619873046875,
+      "sampled_element_count": 8192,
+      "sampled_group_count": 64,
+      "sampled_source_bytes": 16384,
+      "scope": "attention_q_a_projection",
+      "tensor_count": 1
+    },
+    {
+      "cosine_similarity": 0.9912131106194315,
+      "maximum_absolute_error": 0.0364815890789032,
+      "mean_absolute_error": 0.0058600424881092295,
+      "normalized_mean_absolute_error": 0.16003874190312725,
+      "normalized_root_mean_square_error": 0.13357717567894453,
+      "reconstructed_zero_fraction": 0.3828125,
+      "sampled_element_count": 8192,
+      "sampled_group_count": 64,
+      "sampled_source_bytes": 16384,
+      "scope": "attention_q_b_projection",
+      "tensor_count": 1
+    },
+    {
+      "cosine_similarity": 0.9003324762202202,
+      "maximum_absolute_error": 0.07450825534760952,
+      "mean_absolute_error": 0.0077720777378118555,
+      "normalized_mean_absolute_error": 0.432451916484514,
+      "normalized_root_mean_square_error": 0.43520274845556806,
+      "reconstructed_zero_fraction": 0.4228706359863281,
+      "sampled_element_count": 524288,
+      "sampled_group_count": 4096,
+      "sampled_source_bytes": 1048576,
+      "scope": "routed_expert_down_projection",
+      "tensor_count": 64
+    },
+    {
+      "cosine_similarity": 0.9005249081327489,
+      "maximum_absolute_error": 0.08279097825288773,
+      "mean_absolute_error": 0.008151038595531901,
+      "normalized_mean_absolute_error": 0.43245556815604624,
+      "normalized_root_mean_square_error": 0.4348044271078927,
+      "reconstructed_zero_fraction": 0.422515869140625,
+      "sampled_element_count": 524288,
+      "sampled_group_count": 4096,
+      "sampled_source_bytes": 1048576,
+      "scope": "routed_expert_gate_projection",
+      "tensor_count": 64
+    },
+    {
+      "cosine_similarity": 0.9002061046166012,
+      "maximum_absolute_error": 0.10195701755583286,
+      "mean_absolute_error": 0.008123389017994143,
+      "normalized_mean_absolute_error": 0.432535348867887,
+      "normalized_root_mean_square_error": 0.43546408486922844,
+      "reconstructed_zero_fraction": 0.4224395751953125,
+      "sampled_element_count": 524288,
+      "sampled_group_count": 4096,
+      "sampled_source_bytes": 1048576,
+      "scope": "routed_expert_up_projection",
+      "tensor_count": 64
+    },
+    {
+      "cosine_similarity": 0.9930280825976999,
+      "maximum_absolute_error": 0.00530133955180645,
+      "mean_absolute_error": 0.0017498187413593769,
+      "normalized_mean_absolute_error": 0.12730815789116448,
+      "normalized_root_mean_square_error": 0.11881540268685112,
+      "reconstructed_zero_fraction": 0.16845703125,
+      "sampled_element_count": 8192,
+      "sampled_group_count": 64,
+      "sampled_source_bytes": 16384,
+      "scope": "shared_expert_down_projection",
+      "tensor_count": 1
+    },
+    {
+      "cosine_similarity": 0.992626193497607,
+      "maximum_absolute_error": 0.00704520009458065,
+      "mean_absolute_error": 0.0015441204819524046,
+      "normalized_mean_absolute_error": 0.12981757602436914,
+      "normalized_root_mean_square_error": 0.12265114101509794,
+      "reconstructed_zero_fraction": 0.1627197265625,
+      "sampled_element_count": 8192,
+      "sampled_group_count": 64,
+      "sampled_source_bytes": 16384,
+      "scope": "shared_expert_gate_projection",
+      "tensor_count": 1
+    },
+    {
+      "cosine_similarity": 0.992859624401018,
+      "maximum_absolute_error": 0.00605119951069355,
+      "mean_absolute_error": 0.0018261572050732866,
+      "normalized_mean_absolute_error": 0.12909266910144915,
+      "normalized_root_mean_square_error": 0.12011692631089169,
+      "reconstructed_zero_fraction": 0.16845703125,
+      "sampled_element_count": 8192,
+      "sampled_group_count": 64,
+      "sampled_source_bytes": 16384,
+      "scope": "shared_expert_up_projection",
+      "tensor_count": 1
+    }
+  ],
+  "sampled_element_count": 1638400,
+  "sampled_group_count": 12800,
+  "sampled_source_bytes_read": 3276800,
+  "sampled_tensor_count": 200,
+  "sampling_strategy": "evenly_spaced_group_indices_v1",
+  "schema_id": "ams.glm4.quantization-probe.v1",
+  "shard_content_hash": "sha256:8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1",
+  "shard_name": "model-00002-of-00048.safetensors",
+  "shard_tensor_count": 206,
+  "source_dtype_counts": [
+    [
+      "BF16",
+      205
+    ],
+    [
+      "F32",
+      1
+    ]
+  ],
+  "source_file_bytes": 1270648128,
+  "source_index_hash": "sha256:91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791",
+  "source_repository": "zai-org/GLM-4.7-Flash",
+  "source_revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+  "status": "diagnostic",
+  "ternary_config_hash": "sha256:1dc19a60253d029e748a1d652baaa61f66716e9241a2e2ad779412fdf1a6c5d3"
+}

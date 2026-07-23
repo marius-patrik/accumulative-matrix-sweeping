@@ -129,6 +129,34 @@ def _encode_group(values: Sequence[float]) -> bytes:
     return bytes(payload)
 
 
+def encode_int4_group_reference(
+    values: Sequence[float],
+    config: Int4CodecConfig | None = None,
+) -> bytes:
+    """Validate and encode one complete v1 group using the production codec semantics."""
+    config = config or Int4CodecConfig()
+    try:
+        element_count = len(values)
+    except TypeError as exc:
+        raise AmsError(ErrorCode.PLAN_INVALID, "INT4 group values must be a sequence") from exc
+    checked_positive(element_count, name="int4.group_element_count")
+    if element_count > config.group_size:
+        raise AmsError(ErrorCode.PLAN_INVALID, "INT4 group exceeds configured group size")
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise AmsError(ErrorCode.PLAN_INVALID, "INT4 group values must be numeric")
+        try:
+            finite = math.isfinite(value)
+        except OverflowError as exc:
+            raise AmsError(
+                ErrorCode.NUMERIC_FAILURE,
+                "INT4 source contains an unrepresentable numeric value",
+            ) from exc
+        if not finite:
+            raise AmsError(ErrorCode.NUMERIC_FAILURE, "INT4 source contains NaN or infinity")
+    return _encode_group(values)
+
+
 def _write_exact(sink: BinarySink, payload: bytes, digest) -> int:
     view = memoryview(payload)
     try:
@@ -199,7 +227,10 @@ def encode_int4_stream(
             maximum_read = max(maximum_read, byte_count)
             encoded_bytes += _write_exact(
                 sink,
-                _encode_group(_decode_source_group(source_buffer, count, source_dtype)),
+                encode_int4_group_reference(
+                    _decode_source_group(source_buffer, count, source_dtype),
+                    config,
+                ),
                 output_digest,
             )
             completed += count

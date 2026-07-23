@@ -126,26 +126,38 @@ once, retains the verified handles and model plan, and accepts strict JSON-line 
 request-ID cancellation between model transitions, publishes exactly one terminal frame before
 releasing the request slot, and cancels on EOF or graceful shutdown. The process fixture proves
 concurrent-request rejection, cancellation during a full-capacity prefill, and deterministic
-same-process retry. Each request still receives a fresh cache, and the worker remains a token-ID
-engine rather than a tokenizer-integrated OpenAI-compatible service.
+same-process retry. Each request still receives a fresh cache. A strict Python backend now handshakes
+the binding hash, context capacity, and tokenizer vocabulary, renders the admitted GLM chat template,
+uses `DecodeStream` with a final full-decode consistency check, and forwards real model output through
+both Responses and Chat Completions. Its miniature proof covers process restart, Responses disconnect
+cancellation, late-cancel idempotence, and same-backend Chat retry. This first connected slice is
+deliberately text-only and greedy; thinking/reasoning output, tools, structured output, sampling, and
+prompt-cache hints fail closed.
 The first deterministic GLM-4.7 precision candidate keeps embeddings, routers, norms, and correction
 biases exact, assigns routed-expert matrices to grouped ternary, and assigns other rank-2 compute
 matrices to symmetric INT4. A complete header-only audit estimates 9,100,218,112 encoded tensor bytes
-from 62,442,983,168 source bytes, but the candidate remains experimental: it has not been converted,
-executed, or quality-qualified. Qualification requires exact corpus, evaluator, baseline, runtime,
-sample-count, NLL, token-agreement, and task-retention evidence against caller-supplied thresholds.
+from 62,442,983,168 source bytes. A separate bounded diagnostic full-hashed one 1,270,648,128-byte
+official shard and sampled 64 evenly spaced groups from each of its 200 compressed tensors without a
+read larger than 256 bytes: INT4 reached 0.9922 cosine similarity and 0.1254 normalized RMS error,
+while ternary routed experts reached 0.9004 and 0.4352 respectively. This is useful tensor-error
+evidence—not a quality pass—and makes the blanket expert-ternary assignment an explicit comparison
+target for later alternatives. The candidate remains experimental: it has not been converted as a
+complete package, used for model inference, or quality-qualified. Qualification requires exact
+corpus, evaluator, baseline, runtime, sample-count, NLL, token-agreement, and task-retention evidence
+against caller-supplied thresholds.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds
 render/encode/decode inputs, and reproduces the pinned Transformers 5.12.0 sandboxed chat-template
 environment. Plain, tool, and reasoning-history prompts match Transformers byte-for-byte and
 token-for-token with `tokenizers` 0.22.2. Install this surface with `pip install -e ".[tokenizer]"`;
-the native greedy session is not yet connected to this tokenizer or the OpenAI backend.
+the text-only native backend now uses this exact renderer, encoder, and streaming decoder.
 An experimental dependency-free localhost adapter now normalizes Froq-shaped Responses and Chat
 Completions requests into one typed model contract and emits byte-exact text, reasoning, tool-call,
-usage, error, and SSE terminal frames. It is deliberately backend-injected: no fixture response is
-presented as model inference, and unsupported persistence, hosted-tool, and provider fields fail during
-request preflight.
+usage, error, and SSE terminal frames. The protocol remains backend-injected for isolated wire tests,
+while the GLM-4 native backend now supplies proven miniature model inference. Unsupported persistence,
+hosted-tool, provider, and not-yet-qualified model controls fail instead of silently changing
+semantics.
 That reader has audited every header in the pinned 48-shard GLM-4.7-Flash checkpoint without
 downloading tensor payloads: all 9,703 index mappings are present and contiguous. The provider's
 nonstandard `total_size` is proven to count elements, and that interpretation is accepted only when

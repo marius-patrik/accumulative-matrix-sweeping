@@ -208,7 +208,20 @@ The reconstruction branch currently contains:
   These values were reproduced by range-reading only 1,192,336 prefix/header bytes with
   `ci/audit_glm4_precision.py` and recorded in
   `docs/evidence/glm47_precision_candidate.json`; they are a structural storage estimate, not
-  conversion, integrity, memory, speed, or quality evidence. A candidate can become qualified only
+  conversion, integrity, memory, speed, or quality evidence. The separate
+  `ci/probe_glm4_quantization.py` boundary independently rederived the candidate and policy identities,
+  full-hashed exact official shard `model-00002-of-00048.safetensors` (1,270,648,128 bytes), required
+  its 206-tensor header to equal the normalized index subset, and then sampled 64 evenly spaced
+  128-value groups from each compressed tensor. It examined 1,638,400 values across 12,800 groups
+  while reading 3,276,800 sampled source bytes with a 256-byte maximum sample read. The eight sampled
+  INT4 tensors reached 0.992227 cosine similarity and 0.125400 normalized RMS error; the 192 routed
+  expert ternary tensors reached 0.900355 and 0.435155, with a 0.422609 reconstructed-zero fraction.
+  The exact diagnostic is recorded in
+  `docs/evidence/glm47_shard2_quantization_probe.json`. It covers one shard and tensor reconstruction
+  only; its schema fixes `qualifies_precision_policy` to false. It neither qualifies the blanket
+  routed-expert ternary choice nor substitutes for whole-model logits, tasks, latency, or resource
+  evidence. Instead it makes less aggressive expert encodings and ternary calibration variants
+  mandatory comparison candidates before full conversion. A candidate can become qualified only
   through evidence that
   identifies the exact source/candidate, calibration and evaluation corpora, evaluator, trusted
   baseline, and candidate runtime, and clears every explicitly supplied token-count, task-count, NLL,
@@ -341,8 +354,15 @@ The reconstruction branch currently contains:
   completion/error frame is published while the authoritative request slot is still held. EOF and
   explicit shutdown cancel active work. The process proof streams `[7, 1]`, rejects a concurrent
   request, cancels a full-capacity 15-token prefill, then produces the identical valid result in the
-  same PID. Cache/scratch storage is still fresh per request; tokenizer integration, OpenAI protocol
-  translation, sampling, and cache reuse remain open.
+  same PID. A strict Python backend now validates the worker binding/context/vocabulary handshake,
+  translates text message histories through the admitted GLM chat template, and uses the pinned
+  tokenizers 0.22.2 `DecodeStream` with a terminal full-decode consistency check. The model-backed
+  miniature converts a three-token prompt into two native tokens, serves the exact decoded text
+  through Responses streaming and Chat non-streaming, restarts after forced worker death, drains a
+  disconnected stream without poisoning the next request, and publishes exact 3-input/2-output usage.
+  Cache/scratch storage is still fresh per request. This first connected slice rejects reasoning,
+  tools, structured output, non-greedy sampling, and prompt-cache hints; those capabilities and cache
+  reuse remain open.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal
@@ -373,10 +393,13 @@ The reconstruction branch currently contains:
   A read-only external probe compiled the current Froq fork's real `SamplingClient` and pinned
   `async-openai` decoder, then exercised both endpoints against this adapter. Both paths reconstructed
   the expected text byte-for-byte and accepted terminal usage of 16 tokens. The probe used a
-  deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
+  deterministic injected backend, so it proves the Froq wire boundary independently. A separate
+  miniature test now proves model-backed serving through the same normalized Responses/Chat contract;
+  no real Froq coding task or production GLM-4.7/GLM-5.2 package has run yet.
 
-The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 198 Python tests, and runs 55 Rust tests plus `cargo check` and strict Clippy. The unit
+The automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
+Draft 2020-12, passes 212 ordinary Python tests plus four post-build native-process cases, and runs
+58 core plus eight runtime Rust tests with `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
@@ -415,8 +438,8 @@ non-overlapping coverage of the remaining data buffer. See the
 - Froq configuration remains read-only. Its own sampler fixtures were used to pin the local
   Responses/Chat stream shapes, and its real client/decoder accepts both current fixture-backed
   endpoints. The eventual pointer is a custom provider with `api_backend = "responses"` and a local
-  `/v1` base URL, but it will not be added until the protocol adapter is connected to a real AMS model
-  backend.
+  `/v1` base URL. The adapter now reaches a real AMS miniature, but the Froq pointer remains gated on
+  a converted and qualified GLM-4.7 package plus reasoning/tool-call support and a real coding task.
 - The protocol adapter currently rejects stored/continued Responses, background mode, hosted tools,
   multiple choices, and unsupported sampling fields instead of silently changing their semantics.
   `json_object` output requires strict duplicate-free JSON and object shape. JSON Schema intent is
