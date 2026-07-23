@@ -9,6 +9,15 @@ from ams.integrations.glm4_moe_lite import (
     parse_glm4_moe_lite_architecture,
     validate_glm4_moe_lite_tensor_inventory,
 )
+from ams.integrations.glm4_tokenizer import (
+    OFFICIAL_GLM4_TOKENIZER_POLICY,
+    Glm4AddedToken,
+    Glm4TokenizerAssets,
+    Glm4TokenizerFile,
+    Glm4TokenizerPolicy,
+    Glm4TokenizerRuntime,
+    admit_glm4_tokenizer_assets,
+)
 from ams.integrations.glm_moe_dsa import (
     GlmMoeDsaArchitecture,
     GlmTensorInventory,
@@ -63,10 +72,16 @@ from ams.integrations.safetensors import (
 )
 
 __all__ = [
+    "OFFICIAL_GLM4_TOKENIZER_POLICY",
+    "Glm4AddedToken",
     "Glm4MoeLiteArchitecture",
     "Glm4MoeLiteTensorInventory",
     "Glm4MoeLiteTensorRole",
     "Glm4MoeLiteTensorSlot",
+    "Glm4TokenizerAssets",
+    "Glm4TokenizerFile",
+    "Glm4TokenizerPolicy",
+    "Glm4TokenizerRuntime",
     "GlmMoeDsaArchitecture",
     "GlmTensorInventory",
     "GlmTensorRole",
@@ -95,6 +110,7 @@ __all__ = [
     "SafetensorsLimits",
     "SafetensorsTensor",
     "StagedHuggingFaceShard",
+    "admit_glm4_tokenizer_assets",
     "audit_huggingface_headers",
     "build_huggingface_catalog",
     "build_huggingface_header_catalog",

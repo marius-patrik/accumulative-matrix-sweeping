@@ -96,7 +96,14 @@ a later expert failure rolls earlier layer prefixes back so the same token can b
 The first native causal-LM token wrapper adds exact embedding-row access, final RMSNorm, mixed-storage
 LM-head execution, and deterministic lowest-index argmax. It preflights the complete manually bound
 model before the embedding read and rolls the decoder stack back if the final norm or head fails; a
-package-to-native binder, tokenizer, sampling, and generation loop are still required.
+package-to-native binder, sampling, and generation loop are still required.
+The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
+Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
+contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds
+render/encode/decode inputs, and reproduces the pinned Transformers 5.12.0 sandboxed chat-template
+environment. Plain, tool, and reasoning-history prompts match Transformers byte-for-byte and
+token-for-token with `tokenizers` 0.22.2. Install this surface with `pip install -e ".[tokenizer]"`;
+the complete autoregressive loop is not yet connected.
 An experimental dependency-free localhost adapter now normalizes Froq-shaped Responses and Chat
 Completions requests into one typed model contract and emits byte-exact text, reasoning, tool-call,
 usage, error, and SSE terminal frames. It is deliberately backend-injected: no fixture response is

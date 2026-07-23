@@ -12,7 +12,12 @@ authors = [{ name = "AMS contributors" }]
 dependencies = []
 
 [project.optional-dependencies]
+tokenizer = [
+  "jinja2==3.1.6",
+  "tokenizers==0.22.2",
+]
 test = [
+  "jinja2==3.1.6",
   "jsonschema>=4.23",
   "pytest>=8.3",
   "ruff>=0.9",

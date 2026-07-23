@@ -1,6 +1,6 @@
 # AMS Reconstruction Charter
 
-Status date: 2026-07-22
+Status date: 2026-07-23
 
 ## Long-term goal
 
@@ -27,7 +27,7 @@ projected from parameter counts.
 | Missing AMS gitlink | `813d55ad985dc9d17daae08957d0853b569278bd` | Referenced by recovered PAES but absent from available Git objects. It must not be synthesized or misrepresented as recovered history. |
 | Froq personal fork | `rebrand/grok-to-froq` at `9821dfe2e48c2e48b8c92244b716d1225153b606` | User-owned clean worktree containing the completed rebrand and Windows build fixes. It remains read-only during AMS reconstruction. |
 | Froq upstream | `xai-org/grok-build` `main` at `a5727c5960452e7527a154b25cb5bf00cda0545e` | Model-agnostic harness reference. It is one commit ahead and three commits behind the current fork ancestry at this status date. |
-| GLM-4.7-Flash model | `zai-org/GLM-4.7-Flash` at `7dd20894a642a0aa287e9827cb1a1f7f91386b67` | Official config, generation config, tokenizer metadata/template, README, and safetensors index are pinned locally. The config and index SHA-256 digests are `dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb` and `91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791`. Shard `model-00002-of-00048.safetensors` is pinned locally at 1,270,648,128 bytes with SHA-256 `8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1`; no other weight shard has been downloaded. |
+| GLM-4.7-Flash model | `zai-org/GLM-4.7-Flash` at `7dd20894a642a0aa287e9827cb1a1f7f91386b67` | Official config, generation config, complete tokenizer triplet, README, and safetensors index are pinned locally. `tokenizer.json` is 20,217,442 bytes with SHA-256 `19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d`; tokenizer config and chat-template hashes are `31a173e2797ddc8b72ac996803513e627fc28d7aad02cfcce321a431d865c86d` and `d63ad536c3c81880043e22ec7fd08db42b4d8fb7c89c7138bc562bfa25281375`. The config and index SHA-256 digests are `dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb` and `91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791`. Shard `model-00002-of-00048.safetensors` is pinned locally at 1,270,648,128 bytes with SHA-256 `8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1`; no other weight shard has been downloaded. |
 | GLM-5.2 model | `zai-org/GLM-5.2` at `b4734de4facf877f85769a911abafc5283eab3d9` | Official config, tokenizer metadata/template, license, README, and safetensors index are pinned locally. No weight shard has been downloaded. |
 | GLM-4-MoE-Lite reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, generated/modular model, tests, and documentation used to pin MLA, interleaved RoPE, sigmoid/noaux_tc routing, dense/sparse scheduling, and base-model treatment of MTP weights. |
 | GLM-MoE-DSA reference | Hugging Face Transformers tag `v5.12.0`, peeled commit `e0e7504bca2bfd1b85bb0eedb148f7b250226f06` | Sparse local checkout of the official configuration, model, tests, and documentation used to derive execution order and compatibility risks. |
@@ -265,7 +265,16 @@ The reconstruction branch currently contains:
   three-token-vocabulary fixture pins 144 bytes of non-layer scratch, rejects a short LM-head binding
   before the embedding reader is touched, rolls both layer caches back when a non-finite LM-head value
   fails after decoder execution, and retries successfully. The wrapper is manually bound; package plan
-  construction, tokenizer-backed generation, and sampling remain open.
+  construction, autoregressive generation, and sampling remain open.
+- an exact GLM-4.7 tokenizer admission and execution boundary. It hashes the complete pinned
+  tokenizer/config/template triplet before parsing, rejects symlinks and semantic drift, proves the
+  contiguous tokenizer range `0..154855`, and identifies model-logit IDs `154856..154879` as unmapped
+  and therefore ineligible for decode selection. The optional runtime uses exact `tokenizers` 0.22.2
+  and a Transformers-compatible immutable Jinja sandbox with bounded JSON/render/token inputs. Plain,
+  tool-schema, and prior-reasoning chat cases match pinned Transformers 5.12.0 exactly in rendered
+  bytes and token IDs; all three decode back to their rendered prompt without loss. The independent
+  qualification command is
+  `python ci/verify_glm4_tokenizer.py <asset-root> --transformers-oracle`.
 - a range-streamed native DSA selector that scans causal offloaded index keys while retaining only
   `top_k` scores and indices. The 72-byte fixture never reads its declared future key, rejects short
   scratch before I/O, and differentially matches the context-sized semantic oracle across causal
@@ -299,7 +308,7 @@ The reconstruction branch currently contains:
   deterministic injected backend, so it proves the Froq wire boundary but not model-backed serving.
 
 The initial automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, runs 177 Python tests, and runs 51 Rust tests plus `cargo check` and strict Clippy. The unit
+Draft 2020-12, runs 185 Python tests, and runs 51 Rust tests plus `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a
 28-byte working arena and exact source-order parity, while verifying that the maximum read plus
