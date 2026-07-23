@@ -43,6 +43,7 @@ from ams.ops import (
     GlmReferenceTensor,
     GlmReferenceWeights,
     GlmWeightAccess,
+    rms_norm_reference,
     run_glm4_moe_lite_prefill_reference,
     serialize_glm4_native_binding_plan,
 )
@@ -822,6 +823,91 @@ def test_mini_glm4_native_generation_process_matches_low_bit_oracle(
     assert json.loads(over_capacity.stderr)["code"] == ErrorCode.PREFLIGHT_NO_WORKING_SET.value
 
     retried = generate(valid_request)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout) == output
+
+
+def test_mini_glm4_native_observation_process_matches_low_bit_oracle(
+    tmp_path: Path,
+) -> None:
+    binary = os.environ.get("AMS_NATIVE_BINARY")
+    if binary is None:
+        pytest.skip("native observation binary is exercised by the post-build verification step")
+    package_root, architecture, expected_weights = build_mini_glm4_package(tmp_path)
+    package_weights = GlmPackageWeights.open(package_root, linear_arena_bytes=64)
+    plan = package_weights.native_glm4_binding_plan(
+        context_capacity_tokens=16,
+        tokenizer_vocabulary_size=8,
+        eos_token_ids=(6,),
+    )
+    envelope_path = tmp_path / "native-observation-binding.json"
+    envelope_path.write_bytes(serialize_glm4_native_binding_plan(plan))
+    request_path = tmp_path / "observation-request.json"
+
+    def observe(request, *, envelope: Path = envelope_path):
+        request_path.write_bytes(canonical_json_bytes(request))
+        return subprocess.run(
+            [binary, "observe", str(envelope), str(request_path), "64"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    valid_request = {
+        "schema_id": "ams.native.glm4-observation-request.v1",
+        "input_token_ids": [1, 3],
+    }
+    completed = observe(valid_request)
+    assert completed.returncode == 0, completed.stderr
+    output = json.loads(completed.stdout)
+    assert output["schema_id"] == "ams.native.glm4-observation.v1"
+    assert output["binding_hash"] == plan.binding_hash
+    assert output["committed_cache_tokens"] == 2
+    assert output["cache_heap_bytes"] == plan.cache_storage_bytes_total
+    assert len(output["hidden_states"]) == 2
+    assert all(len(row) == architecture.hidden_size for row in output["hidden_states"])
+    assert len(output["logits"]) == 2
+    assert all(len(row) == architecture.vocab_size for row in output["logits"])
+
+    reference = run_glm4_moe_lite_prefill_reference(
+        architecture,
+        expected_weights,
+        tuple(valid_request["input_token_ids"]),
+    )
+    norm_weight = expected_weights.vector("model.norm.weight", architecture.hidden_size)
+    normalized_observations = tuple(
+        rms_norm_reference(row, norm_weight, architecture.rms_norm_eps)
+        for row in output["hidden_states"]
+    )
+    for observed, expected in zip(
+        normalized_observations,
+        reference.hidden_states,
+        strict=True,
+    ):
+        assert observed == pytest.approx(expected, rel=0.01, abs=0.01)
+    for observed, expected in zip(output["logits"], reference.logits, strict=True):
+        assert observed == pytest.approx(expected, rel=0.01, abs=0.01)
+    assert output["selected_token_ids"] == [
+        max(range(plan.tokenizer_vocabulary_size), key=row.__getitem__) for row in reference.logits
+    ]
+
+    malformed = observe(
+        {**valid_request, "unreviewed": True},
+        envelope=tmp_path / "binding-must-not-be-opened.json",
+    )
+    assert malformed.returncode != 0
+    assert json.loads(malformed.stderr)["code"] == ErrorCode.INVALID_PACKAGE.value
+
+    empty = observe({**valid_request, "input_token_ids": []})
+    assert empty.returncode != 0
+    assert json.loads(empty.stderr)["code"] == ErrorCode.PLAN_INVALID.value
+
+    too_many = observe({**valid_request, "input_token_ids": [1] * 9})
+    assert too_many.returncode != 0
+    assert json.loads(too_many.stderr)["code"] == ErrorCode.PLAN_INVALID.value
+
+    retried = observe(valid_request)
     assert retried.returncode == 0, retried.stderr
     assert json.loads(retried.stdout) == output
 

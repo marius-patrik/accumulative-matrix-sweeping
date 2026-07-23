@@ -288,10 +288,23 @@ The reconstruction branch currently contains:
   hidden-state thresholds. The exact authenticated 2,539,429,936-byte shard 47 final normalization
   and LM head projected both layer outputs through one identical pinned BF16 readout; all two
   top-token selections agreed. `docs/evidence/glm47_layer1_bf16_differential.json` is nevertheless
-  `blocked` and non-qualifying: no native `ams-core` official-layer observation exists, and the
-  isolated readout is not a complete-model teacher-forced execution.
+  `blocked` and non-qualifying: that record's candidate is not a native `ams-core` observation, and
+  its isolated readout is not a complete-model teacher-forced execution.
   `ci/verify_glm4_official_layer.py` full-hashes both sources, rejects
   config/index/shard/toolchain drift, and exits 2 while either blocker remains.
+- an authenticated native two-layer differential boundary. The verifier full-hashes the exact
+  pinned embedding/dense-layer shard 1, sparse-layer shard 2, final-norm/LM-head shard 47, and MTP
+  shard 48 before constructing a relocation-stable binding. The unchanged native package contract
+  binds official source layers 0 and 1 and rebinds the separately admitted, non-executed source MTP
+  layer 47 as layer 2. The release `ams-runtime` then executes both tokens through the same
+  `ams-core` plan, cache, scratch, final normalization, and LM-head path as generation. Against
+  pinned Transformers BF16, native decoder outputs reached 0.9999888240274544 cosine similarity
+  and 0.004787072790994459 normalized RMS error; both complete-logit argmaxes agreed. The
+  request is bounded to eight tokens and 64 MiB of raw numeric observation storage, strict fields
+  are admitted before the binding is opened, and shape or late numeric failures preserve caller
+  output and cache prefixes. Evidence in
+  `docs/evidence/glm47_two_layer_native_differential.json` remains `blocked` only because executing
+  two of 47 base layers is not a complete-model teacher-forced qualification.
 - deterministic scalar GLM control oracles for RMSNorm, indexer LayerNorm, numerically stable SiLU and
   softmax, provider-compatible MLA RoPE (interleaved input pairs emitted as half-split rotated
   components), half-split indexer RoPE, causal DSA top-k with key-index tie breaking, and
@@ -364,6 +377,13 @@ The reconstruction branch currently contains:
   fails after decoder execution, and retries successfully. The plan separately admits full model rows
   and tokenizer-mapped IDs; its deliberately highest unmapped logit cannot be selected or accepted as
   input. The wrapper is manually bound; package plan construction and non-greedy sampling remain open.
+- a bounded diagnostic observation seam over that same native causal-LM wrapper. It copies the
+  decoder output and complete model-vocabulary logits only after the exact next-token transition
+  succeeds, while retaining generation's preflight and cache rollback semantics. The CLI admits
+  strict nonsymlink JSON requests before model admission, rejects empty, over-eight, or
+  over-capacity inputs, and caps raw numeric hidden/logit storage at 64 MiB. The miniature process
+  fixture covers successful
+  oracle parity, unknown-field rejection before binding access, empty input, and deterministic retry.
 - an allocation-free native greedy generation session that borrows one immutable prompt and EOS set,
   preflights the prompt plus worst-case generated-input prefix against the fixed KV capacity, and
   exposes ordered prefill, token, and terminal transitions. Non-final prompt positions execute the
@@ -463,8 +483,8 @@ The reconstruction branch currently contains:
   no real Froq coding task or production GLM-4.7/GLM-5.2 package has run yet.
 
 The automated gate compiles all Python, passes Ruff, validates every repository JSON Schema as
-Draft 2020-12, passes 248 ordinary Python tests with four expected native-binary skips, then builds
-`ams-runtime` and passes all four skipped native-process/model-backed cases. It also runs 58 core plus
+Draft 2020-12, passes 249 ordinary Python tests with five expected native-binary skips, then builds
+`ams-runtime` and passes all five skipped native-process/model-backed cases. It also runs 58 core plus
 eight runtime Rust tests with `cargo check` and strict Clippy. The unit
 streamed-linear cases use a 340-byte weight object with 12-,
 20-, and 64-byte declared working sets. The invariant case uses a 66,548-byte weight object with a

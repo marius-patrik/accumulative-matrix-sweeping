@@ -177,6 +177,17 @@ is not a complete-model teacher-forced execution. Reproduce the diagnostic with
 `pip install -e ".[official-layer]"` followed by `python ci/verify_glm4_official_layer.py
 <asset-root> <shard-2-path> --head-shard <shard-47-path> --samples 2`; exit status 2 means the
 recorded blockers remain, not that the authenticated numeric comparisons failed.
+A separate native differential now authenticates the exact pinned shards 1, 2, 47, and 48, binds
+the official embedding, dense layer 0, sparse layer 1, final normalization, and LM head directly to
+the release `ams-runtime`, and captures decoder hidden states and complete logits through
+`ams-core`. Against the same pinned Transformers BF16 implementation, its two deterministic
+positions reached 0.9999888 hidden-state cosine similarity, 0.0047871 normalized RMS error, and
+100% top-token agreement. `docs/evidence/glm47_two_layer_native_differential.json` therefore clears
+the native-observation blocker while remaining deliberately `blocked` and non-qualifying because
+two layers are not a complete-model teacher-forced execution. Reproduce it with `python
+ci/verify_glm4_official_layer_native.py <asset-root> <shard-1-path> <shard-2-path>
+<shard-47-path> <shard-48-path> <ams-runtime-binary> --samples 2`; exit status 2 records only that
+remaining full-model blocker.
 The official GLM-4.7 tokenizer is now a fail-closed optional runtime boundary rather than a
 Transformers dependency. It admits only the exact pinned tokenizer/config/template triplet, proves
 contiguous IDs `0..154855`, exposes the 24 model-logit slots with no tokenizer mapping, bounds

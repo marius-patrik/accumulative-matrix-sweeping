@@ -26,6 +26,13 @@ struct GreedyRequest {
     max_new_tokens: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservationRequest {
+    schema_id: String,
+    input_token_ids: Vec<usize>,
+}
+
 fn static_error(code: ams_core::ErrorCode, context: &'static str) -> RuntimeError {
     RuntimeError::from(ams_core::AmsError::new(code, context))
 }
@@ -87,6 +94,47 @@ fn read_greedy_request(path: impl AsRef<Path>) -> Result<GreedyRequest, RuntimeE
     Ok(request)
 }
 
+fn read_observation_request(path: impl AsRef<Path>) -> Result<ObservationRequest, RuntimeError> {
+    let path = path.as_ref();
+    let metadata = path.symlink_metadata().map_err(|_| {
+        static_error(
+            ams_core::ErrorCode::IoFailure,
+            "observation request metadata read failed",
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(static_error(
+            ams_core::ErrorCode::InvalidPackage,
+            "observation request is not a nonsymlink regular file",
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_REQUEST_BYTES {
+        return Err(static_error(
+            ams_core::ErrorCode::PlanInvalid,
+            "observation request size is outside the admitted bound",
+        ));
+    }
+    let payload = fs::read(path).map_err(|_| {
+        static_error(
+            ams_core::ErrorCode::IoFailure,
+            "observation request read failed",
+        )
+    })?;
+    let request: ObservationRequest = serde_json::from_slice(&payload).map_err(|_| {
+        static_error(
+            ams_core::ErrorCode::InvalidPackage,
+            "observation request JSON is malformed or contains unreviewed fields",
+        )
+    })?;
+    if request.schema_id != "ams.native.glm4-observation-request.v1" {
+        return Err(static_error(
+            ams_core::ErrorCode::CapabilityMismatch,
+            "observation request schema is unsupported",
+        ));
+    }
+    Ok(request)
+}
+
 fn run() -> Result<(), RuntimeError> {
     let mut arguments = env::args_os().skip(1);
     let command = arguments.next().ok_or_else(|| {
@@ -131,6 +179,25 @@ fn run() -> Result<(), RuntimeError> {
             let admitted = admit_glm4_binding_file(path, buffer_bytes)?;
             let output =
                 admitted.generate_greedy(&request.prompt_token_ids, request.max_new_tokens)?;
+            println!("{}", serialize_output(&output)?);
+        }
+        "observe" => {
+            let request_path = arguments.next().ok_or_else(|| {
+                static_error(
+                    ams_core::ErrorCode::PlanInvalid,
+                    "missing observation request path",
+                )
+            })?;
+            let buffer_bytes = parse_buffer(arguments.next())?;
+            if arguments.next().is_some() {
+                return Err(static_error(
+                    ams_core::ErrorCode::PlanInvalid,
+                    "native observe received unexpected arguments",
+                ));
+            }
+            let request = read_observation_request(request_path)?;
+            let admitted = admit_glm4_binding_file(path, buffer_bytes)?;
+            let output = admitted.observe_tokens(&request.input_token_ids)?;
             println!("{}", serialize_output(&output)?);
         }
         "worker" => {

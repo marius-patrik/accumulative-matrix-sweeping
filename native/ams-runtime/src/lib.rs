@@ -22,6 +22,8 @@ pub use worker_protocol::run_glm4_worker_stdio;
 
 const MAX_ENVELOPE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_VERIFICATION_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+const MAX_OBSERVATION_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_OBSERVATION_TOKENS: usize = 8;
 const BINDING_SCHEMA: &str = "ams.native.glm4-binding.v1";
 const ENVELOPE_SCHEMA: &str = "ams.native.glm4-envelope.v1";
 
@@ -237,6 +239,68 @@ pub struct Glm4GreedyOutput {
     pub scratch_logical_bytes: usize,
 }
 
+/// Complete native hidden-state and logit observations for one bounded token sequence.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Glm4ObservationOutput {
+    /// Output schema.
+    pub schema_id: &'static str,
+    /// Exact admitted binding identity.
+    pub binding_hash: String,
+    /// Decoder output after every input token.
+    pub hidden_states: Vec<Vec<f64>>,
+    /// Complete model-vocabulary logits after every input token.
+    pub logits: Vec<Vec<f64>>,
+    /// Lowest-index tokenizer-vocabulary argmax after every input token.
+    pub selected_token_ids: Vec<usize>,
+    /// Model inputs committed to every layer cache.
+    pub committed_cache_tokens: usize,
+    /// Exact fixed K/V heap allocation.
+    pub cache_heap_bytes: usize,
+    /// Exact typed scratch heap allocation, excluding allocator metadata and stack locals.
+    pub scratch_heap_bytes: usize,
+}
+
+fn preflight_observation_request(
+    hidden_elements: usize,
+    vocabulary_size: usize,
+    token_count: usize,
+    context_capacity_tokens: usize,
+) -> Result<(), RuntimeError> {
+    if token_count == 0
+        || token_count > context_capacity_tokens
+        || token_count > MAX_OBSERVATION_TOKENS
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::PlanInvalid,
+            "native observation token count is outside the diagnostic bound",
+        ));
+    }
+    let row_elements = hidden_elements
+        .checked_add(vocabulary_size)
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::PreflightNoWorkingSet,
+                "native observation row size overflowed",
+            )
+        })?;
+    let output_bytes = row_elements
+        .checked_mul(token_count)
+        .and_then(|elements| elements.checked_mul(std::mem::size_of::<f64>()))
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::PreflightNoWorkingSet,
+                "native observation output size overflowed",
+            )
+        })?;
+    if output_bytes > MAX_OBSERVATION_OUTPUT_BYTES {
+        return Err(RuntimeError::new(
+            ErrorCode::PreflightNoWorkingSet,
+            "native observation output exceeds the diagnostic bound",
+        ));
+    }
+    Ok(())
+}
+
 impl AdmittedGlm4Binding {
     /// Admission evidence produced before this binding became observable.
     #[must_use]
@@ -289,6 +353,115 @@ impl AdmittedGlm4Binding {
                 "native reader callback did not publish an outcome",
             )
         })?
+    }
+
+    /// Execute a bounded input sequence and expose native decoder outputs and logits.
+    ///
+    /// This diagnostic path uses the same admitted plan, readers, cache transitions, scratch, final
+    /// normalization, and LM head as generation. It does not change model or package authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed resource, token-policy, storage, codec, numeric, or execution failure.
+    pub fn observe_tokens(
+        &self,
+        input_token_ids: &[usize],
+    ) -> Result<Glm4ObservationOutput, RuntimeError> {
+        let model = self.plan.model_plan();
+        preflight_observation_request(
+            model.scratch().hidden_elements,
+            model.model_vocabulary_size(),
+            input_token_ids.len(),
+            self.context_capacity_tokens(),
+        )?;
+        let binding_hash = self.evidence.binding_hash.clone();
+        self.with_model(|plan, readers| {
+            let cache_plan = plan.decoder().cache_plan();
+            let mut cache_storage =
+                CacheStorage::allocate_all(cache_plan, plan.decoder().layer_count())?;
+            let cache_heap_bytes = CacheStorage::heap_bytes(&cache_storage)?;
+            let mut caches = CacheStorage::bind_all(&mut cache_storage, cache_plan)?;
+            let mut scratch_storage = ModelScratchStorage::new(plan)?;
+            let scratch_heap_bytes = scratch_storage.heap_bytes()?;
+            let mut hidden_states = Vec::new();
+            let mut logits = Vec::new();
+            let mut selected_token_ids = Vec::new();
+            for values in [&mut hidden_states, &mut logits] {
+                values
+                    .try_reserve_exact(input_token_ids.len())
+                    .map_err(|_| {
+                        RuntimeError::new(
+                            ErrorCode::PreflightNoWorkingSet,
+                            "native observation row inventory allocation failed",
+                        )
+                    })?;
+            }
+            selected_token_ids
+                .try_reserve_exact(input_token_ids.len())
+                .map_err(|_| {
+                    RuntimeError::new(
+                        ErrorCode::PreflightNoWorkingSet,
+                        "native observation token inventory allocation failed",
+                    )
+                })?;
+
+            for (position, input_token) in input_token_ids.iter().copied().enumerate() {
+                let mut hidden_row = Vec::new();
+                hidden_row
+                    .try_reserve_exact(plan.scratch().hidden_elements)
+                    .map_err(|_| {
+                        RuntimeError::new(
+                            ErrorCode::PreflightNoWorkingSet,
+                            "native observation hidden allocation failed",
+                        )
+                    })?;
+                hidden_row.resize(plan.scratch().hidden_elements, 0.0);
+                let mut logit_row = Vec::new();
+                logit_row
+                    .try_reserve_exact(plan.model_vocabulary_size())
+                    .map_err(|_| {
+                        RuntimeError::new(
+                            ErrorCode::PreflightNoWorkingSet,
+                            "native observation logit allocation failed",
+                        )
+                    })?;
+                logit_row.resize(plan.model_vocabulary_size(), 0.0);
+                let selected = {
+                    let mut scratch = scratch_storage.scratch();
+                    ams_core::glm4_model_observe_token(
+                        plan,
+                        readers,
+                        &mut caches,
+                        position,
+                        input_token,
+                        &mut scratch,
+                        (&mut hidden_row, &mut logit_row),
+                    )?
+                };
+                hidden_states.push(hidden_row);
+                logits.push(logit_row);
+                selected_token_ids.push(selected);
+            }
+            if caches
+                .iter()
+                .any(|cache| cache.committed_tokens() != input_token_ids.len())
+            {
+                return Err(RuntimeError::new(
+                    ErrorCode::InternalInvariant,
+                    "native observation ended with divergent cache prefixes",
+                ));
+            }
+            Ok(Glm4ObservationOutput {
+                schema_id: "ams.native.glm4-observation.v1",
+                binding_hash,
+                hidden_states,
+                logits,
+                selected_token_ids,
+                committed_cache_tokens: input_token_ids.len(),
+                cache_heap_bytes,
+                scratch_heap_bytes,
+            })
+        })
     }
 
     /// Execute one bounded deterministic greedy request with fresh exact-sized cache state.

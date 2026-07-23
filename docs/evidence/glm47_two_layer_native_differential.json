@@ -1,0 +1,119 @@
+{
+  "blockers": [
+    "two-layer native probe is not a complete-model teacher-forced execution"
+  ],
+  "candidate": {
+    "hidden_state_hash": "sha256:901c5cebac0ca0528eb1d5603bbc610673fef19c1e47e3c8502346033547fd91",
+    "logits_hash": "sha256:2fa54f21ac5fae45eda762b057dead9398416fe56dd958bccd2e9ebcfd39dbe5",
+    "observation_hash": "sha256:bfb4c901fdbd14dd2453f5fa0968e425085739414696399e0f852f30f54e8690",
+    "runtime_code_hash": "sha256:9df828424f1e93082218e5b94d4a8caefbd1da472f9dc7074ed1e9a652eea995",
+    "runtime_id": "ams.core.glm47_two_layer_probe",
+    "runtime_version": "ams/0.1.0.dev0;native/ams-runtime"
+  },
+  "candidate_observation_hash": "sha256:bfb4c901fdbd14dd2453f5fa0968e425085739414696399e0f852f30f54e8690",
+  "gates": {
+    "full_layer_gate_passed": true,
+    "hidden_state_gate_passed": true,
+    "logit_gate_passed": true,
+    "qualifies_precision_policy": false
+  },
+  "hidden_size": 2048,
+  "input": {
+    "content_hash": "sha256:ee586e9c949b9a42b3fe2f8a7f3838b8cce0c1c66b1e626a1a095e500270edba",
+    "hidden_size": 2048,
+    "sample_count": 2,
+    "schema_id": "ams.glm47-layer-input.v1"
+  },
+  "metrics": {
+    "hidden_cosine_similarity": 0.9999888240274544,
+    "hidden_normalized_rmse": 0.004787072790994459,
+    "route_agreement": null,
+    "top_token_agreement": 1.0
+  },
+  "native_probe": {
+    "binding_hash": "sha256:44bdd7219f8dfdb1ace65bcf16509edf0ccb9a3f1331c626b440b0545bf8d766",
+    "bound_mtp_layer": 2,
+    "cache_heap_bytes": 81920,
+    "committed_cache_tokens": 2,
+    "complete_model": false,
+    "executable_source_layers": [
+      0,
+      1
+    ],
+    "input_token_ids": [
+      117736,
+      67585
+    ],
+    "native_binary_hash": "sha256:9df828424f1e93082218e5b94d4a8caefbd1da472f9dc7074ed1e9a652eea995",
+    "schema_id": "ams.glm47-two-layer-native-probe.v1",
+    "scratch_heap_bytes": 2839888,
+    "selected_token_ids": [
+      555,
+      26186
+    ],
+    "source_architecture_hash": "sha256:dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb",
+    "source_mtp_layer": 47,
+    "storage": [
+      {
+        "content_hash": "sha256:90abe0d075755853145c96906a1300f57c167fcc9aa67221239b448abf54933c",
+        "object_id": "hf:model-00001-of-00048.safetensors",
+        "size_bytes": 1438134344
+      },
+      {
+        "content_hash": "sha256:8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1",
+        "object_id": "hf:model-00002-of-00048.safetensors",
+        "size_bytes": 1270648128
+      },
+      {
+        "content_hash": "sha256:1bcc5d06065d2a564894657945ccfe9411762421c2c60acf91de31050cd4d84d",
+        "object_id": "hf:model-00047-of-00048.safetensors",
+        "size_bytes": 2539429936
+      },
+      {
+        "content_hash": "sha256:35fff90a30ca808d86dc24f9e3eda119832ab69fb1f88ae4cccfbf0e5ee409a1",
+        "object_id": "hf:model-00048-of-00048.safetensors",
+        "size_bytes": 1287438264
+      }
+    ]
+  },
+  "reference": {
+    "hidden_state_hash": "sha256:5115cab29211aabc254dda9e91428bb20cc1d2cd207a5d995c7e1ee064423e13",
+    "logits_hash": "sha256:55861f87254cd7b3ce4115de7fd440a82d0a41ea8114ae304c69f3260d57ad9a",
+    "observation_hash": "sha256:27ef2814f2fa3fafe4e887e2c337c20150313d870f5a67a59cc6644df71c032c",
+    "runtime_code_hash": "sha256:fd46ba3a0e90aba678b8e0466abb3fa2de327f95fa0f92878d5a67c5857550b3",
+    "runtime_id": "transformers.glm4_moe_lite.two_layer_probe",
+    "runtime_version": "transformers/5.12.0;torch/2.13.0+cpu;safetensors/0.8.0"
+  },
+  "reference_observation_hash": "sha256:27ef2814f2fa3fafe4e887e2c337c20150313d870f5a67a59cc6644df71c032c",
+  "sample_count": 2,
+  "schema_id": "ams.glm4-layer-differential.v1",
+  "source": {
+    "architecture_hash": "sha256:dc9b97c7c9bed726a2e6939da4234d5c43abb3edec8812068c9a1af1dbc13acb",
+    "layer_index": 1,
+    "logit_readout": {
+      "final_norm_tensor": "model.norm.weight",
+      "kind": "isolated_final_norm_lm_head",
+      "lm_head_tensor": "lm_head.weight",
+      "shard_name": "model-00047-of-00048.safetensors",
+      "shard_sha256": "sha256:1bcc5d06065d2a564894657945ccfe9411762421c2c60acf91de31050cd4d84d",
+      "shard_size_bytes": 2539429936,
+      "teacher_forced_full_model": false
+    },
+    "repository": "zai-org/GLM-4.7-Flash",
+    "revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+    "shard_name": "model-00002-of-00048.safetensors",
+    "shard_sha256": "sha256:8c51e2434efe609cbe652014a924e088a5ea97be35ca29cfa893a1a9a90304b1",
+    "shard_size_bytes": 1270648128,
+    "shard_source_root": "sha256:1b297252e41f3e7e2fb6cd0f52dfa43e4d036b59bfe96be5688af1938d4be45f",
+    "source_index_hash": "sha256:91e6e95ca21700f50904a680c8c4212f5aa16dc7c10a013f01c906957c889791",
+    "tensor_count": 206,
+    "tensor_payload_bytes": 1270622976
+  },
+  "status": "blocked",
+  "thresholds": {
+    "maximum_hidden_normalized_rmse": 0.1,
+    "minimum_hidden_cosine_similarity": 0.995,
+    "minimum_top_token_agreement": 0.95
+  },
+  "vocabulary_size": 154880
+}
